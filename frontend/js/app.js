@@ -293,7 +293,6 @@ async function exportPDF(){if(!window.jspdf?.jsPDF)return toast("PDF engine is l
 const doc=new jsPDF({unit:"pt",format:"a4"});
 const logo=new Image();
 logo.src="assets/abs-logo.png";
-
 const t=totals(),l=ledgerSummary();const W=595,H=842,M=38;const ink=[18,24,39],muted=[102,112,128],accent=[67,56,202],soft=[244,246,250],green=[16,150,90],red=[210,60,70];const fmt=n=>"INR "+Number(n||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});const short=s=>String(s??"").replace(/[\r\n]+/g," ").trim();let page=1;function header(){doc.setFillColor(...ink);doc.rect(0,0,W,88,"F");
 
 doc.setFillColor(...accent);
