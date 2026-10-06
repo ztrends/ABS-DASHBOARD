@@ -84,6 +84,31 @@ body.light{--bg:#f5f7fb;--panel:#fff;--panel2:#fff;--text:#111827;--muted:#66708
 .wa-ai-shell{margin:-2px -1px 0;border-radius:22px;overflow:hidden;background:#0b1416;border:1px solid rgba(255,255,255,.07);box-shadow:0 16px 40px rgba(0,0,0,.2);min-height:calc(100dvh - 155px);display:flex;flex-direction:column}.wa-ai-head{height:62px;display:flex;align-items:center;gap:10px;padding:9px 12px;background:#111b1d;border-bottom:1px solid rgba(255,255,255,.07);flex:none}.wa-ai-avatar{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#00c76f,#08a85e);color:#fff;font-weight:900;font-size:19px}.wa-ai-head>div:nth-child(2){flex:1;min-width:0}.wa-ai-head b{display:block;font-size:13px}.wa-ai-head small{display:block;color:#8ca19b;font-size:8px;margin-top:2px}.wa-ai-head>button{border:0;background:transparent;color:#a9b8b4;font-size:22px;padding:7px}.wa-chat{flex:1;overflow:auto;padding:14px 9px 18px;background:radial-gradient(circle at 20% 0%,rgba(0,200,110,.035),transparent 30%),#0b1416}.wa-bot-bubble,.wa-user-bubble{position:relative;max-width:92%;border-radius:13px;padding:10px 11px 16px;margin:0 0 9px;font-size:11px;line-height:1.5;box-shadow:0 2px 6px rgba(0,0,0,.16)}.wa-bot-bubble{margin-right:auto;background:#1b282a;color:#e9efed;border-top-left-radius:4px}.wa-user-bubble{margin-left:auto;background:#075d48;color:#eafff6;border-top-right-radius:4px}.wa-bot-bubble b{display:block;color:#38dc91;font-size:9px;margin-bottom:4px}.wa-bot-bubble time,.wa-user-bubble time{position:absolute;right:8px;bottom:3px;color:#79908a;font-size:7px}.wa-user-bubble time{color:#91c8b6}.wa-options-label{font-size:9px;color:#a9b9b4;margin:12px 5px 7px;font-weight:800}.wa-options{display:flex;flex-direction:column;gap:1px;border-radius:12px;overflow:hidden;background:#263234;border:1px solid rgba(255,255,255,.08)}.wa-option{width:100%;display:flex;align-items:center;justify-content:center;gap:7px;min-height:51px;padding:11px 10px;background:#1b282a;color:#00d878;border:0;border-bottom:1px solid rgba(255,255,255,.09);font-size:11px;font-weight:700;text-align:center}.wa-option:last-child{border-bottom:0}.wa-option span{font-size:18px;color:#00d878}.wa-option:active{background:#223335}.wa-bot-bubble.compact{margin-top:10px;margin-bottom:0;border-radius:13px 13px 0 0}.wa-more{border-radius:0 0 13px 13px;background:#1b282a}.light .wa-ai-shell{background:#eef2f3;border-color:#d7dfe0}.light .wa-ai-head{background:#fff;border-color:#dce3e4}.light .wa-chat{background:#e9eeee}.light .wa-bot-bubble{background:#fff;color:#182022;border:1px solid #dce4e2}.light .wa-user-bubble{background:#d8f7e8;color:#123c2e}.light .wa-options{background:#fff;border-color:#d9e2df}.light .wa-option{background:#fff;color:#008c54;border-color:#e0e6e4}.light .wa-options-label{color:#5c6c68}.light .wa-ai-head small{color:#71817d}
 @media(min-width:700px){.wa-ai-shell{min-height:calc(100dvh - 170px);max-width:720px;margin:0 auto}.wa-chat{padding:18px 18px 24px}.wa-bot-bubble,.wa-user-bubble{max-width:72%}.statement-filters{grid-template-columns:repeat(6,1fr)}}
 
+/* ANDROID SAFE-AREA HEADER FIX */
+@media(max-width:520px){
+  .topbar{
+    min-height:108px;
+    height:auto;
+    padding:38px 14px 14px;
+    box-sizing:border-box;
+    align-items:flex-end;
+  }
+  .topbar > div:first-child{min-width:0;}
+  .topbar .greeting{line-height:1.2;}
+  .top-actions{align-self:flex-start;margin-top:0;}
+}
+
+/* PROFILE PHOTO CROP EDITOR */
+.crop-editor{padding:4px 0 2px;}
+.crop-editor-copy{font-size:9px;line-height:1.5;color:var(--muted);margin:0 0 11px;}
+.crop-stage{width:min(78vw,320px);height:min(78vw,320px);max-width:320px;max-height:320px;margin:0 auto 13px;border-radius:50%;overflow:hidden;background:#050811;border:2px solid rgba(124,108,255,.55);box-shadow:0 18px 45px rgba(0,0,0,.28);touch-action:none;}
+.crop-stage canvas{display:block;width:100%;height:100%;touch-action:none;}
+.crop-control{padding:0 3px 5px;}
+.crop-control label{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;font-size:9px;}
+.crop-control input[type=range]{width:100%;padding:0;min-height:0;background:transparent;border:0;box-shadow:none;}
+.crop-actions{display:grid;grid-template-columns:1fr 1.3fr;gap:8px;margin-top:12px;}
+.crop-actions button{min-height:44px;border-radius:13px;font-size:10px;font-weight:850;}
+
 /* FINAL MOBILE UX: chart range controls + full-screen ABS AI */
 .chart-range-bar{display:flex;gap:6px;margin:-2px 0 8px;padding:3px;border:1px solid var(--line);background:var(--panel);border-radius:12px;box-shadow:0 5px 16px rgba(0,0,0,.06)}
 .chart-range-bar button{flex:1;border:0;border-radius:9px;background:transparent;color:var(--muted);font-size:9px;font-weight:850;padding:8px 4px;cursor:pointer;transition:.18s ease}
