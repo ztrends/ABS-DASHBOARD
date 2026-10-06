@@ -1,0 +1,53 @@
+name: Build ABS DASHBOARD APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Capacitor
+        run: |
+          cd frontend
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+
+      - name: Prepare Android project
+        run: |
+          cd frontend
+          mkdir -p www
+          cp -r index.html manifest.json sw.js assets css js admin www/ || true
+
+      - name: Initialize Capacitor
+        run: |
+          cd frontend
+          npx cap init "ABS DASHBOARD" "com.absdashboard.app" --web-dir www
+          npx cap add android
+          npx cap sync android
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build APK
+        run: |
+          cd frontend/android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ABS-DASHBOARD-APK
+          path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
