@@ -1,20 +1,68 @@
 const $ = s => document.querySelector(s);
+
+// Firebase cloud sync (keeps localStorage as a safe offline fallback).
+let absFirebaseApp=null, absAuth=null, absDb=null;
+try {
+  if (window.firebase && window.ABS_FIREBASE_CONFIG) {
+    absFirebaseApp = firebase.apps.length ? firebase.app() : firebase.initializeApp(window.ABS_FIREBASE_CONFIG);
+    absAuth = firebase.auth();
+    absDb = firebase.firestore();
+  }
+} catch (e) { console.warn("Firebase initialization failed; offline mode will be used.", e); }
+const cloudReady = () => !!(absAuth && absDb);
+const cloudEmail = mobile => `${String(mobile||"")}@absdashboard.app`;
+const cloudUserRef = uid => absDb?.collection("users").doc(uid);
+const cloudDataRef = uid => cloudUserRef(uid)?.collection("private").doc("data");
+async function cloudWriteUser() {
+  if (!cloudReady() || !absAuth.currentUser || !state.user) return;
+  const t=totals();
+  const rec=currentUserRecord()||{};
+  await cloudUserRef(absAuth.currentUser.uid).set({
+    name:state.user.name, mobile:state.user.mobile, absId:rec.absId||state.user.absId||null,
+    createdAt:rec.createdAt||new Date().toISOString(), lastActive:new Date().toISOString(),
+    income:t.income, expense:t.expense, net:t.net, entries:state.data.income.length+state.data.expenses.length+state.data.loans.length+state.data.emi.length+state.data.ledger.length,
+    verified:!!rec.verified, premium:!!rec.premium
+  },{merge:true});
+}
+async function cloudWriteData() {
+  if (!cloudReady() || !absAuth.currentUser || !state.user || !state.data) return;
+  await cloudDataRef(absAuth.currentUser.uid).set({data:state.data,updatedAt:new Date().toISOString()},{merge:true});
+  await cloudWriteUser();
+}
+async function cloudLoadForCurrentUser() {
+  if (!cloudReady() || !absAuth.currentUser || !state.user) return false;
+  try {
+    const snap=await cloudDataRef(absAuth.currentUser.uid).get();
+    if(snap.exists && snap.data()?.data){
+      state.data=snap.data().data;
+      localStorage.setItem(dataKey(),JSON.stringify(state.data));
+    }
+    const us=await cloudUserRef(absAuth.currentUser.uid).get();
+    if(us.exists){
+      const d=us.data();
+      state.user={...state.user,name:d.name||state.user.name,mobile:d.mobile||state.user.mobile,absId:d.absId||state.user.absId};
+      persistSession(state.user);
+      const users=userRegistry(); let u=users.find(x=>x.mobile===state.user.mobile);
+      if(!u){u={name:state.user.name,mobile:state.user.mobile,createdAt:d.createdAt||new Date().toISOString()};users.push(u);}
+      Object.assign(u,{name:state.user.name,absId:d.absId||u.absId,verified:!!d.verified,premium:!!d.premium,income:Number(d.income||0),expense:Number(d.expense||0),net:Number(d.net||0),entries:Number(d.entries||0),lastActive:d.lastActive||new Date().toISOString()});
+      localStorage.setItem("abs_users",JSON.stringify(users));
+    }
+    ensureData();
+    return true;
+  } catch(e){ console.warn("Firebase cloud load failed; using local data.",e); return false; }
+}
 const EMPTY_DATA = () => ({income:[],expenses:[],loans:[],emi:[],people:[],ledger:[],career:[],settings:{budgets:{},categories:["Food & Dining","Mobile & Internet","Shopping","Travel","Bills & Utilities","Health","Education","Entertainment","Salary","Freelance","Bonus","Other"]}});
 function readSession(){try{const raw=localStorage.getItem("abs_user");if(raw)return JSON.parse(raw)}catch(e){};try{const m=document.cookie.match(/(?:^|; )abs_session=([^;]+)/);if(m)return JSON.parse(decodeURIComponent(m[1]))}catch(e){};return null}
 function persistSession(user){localStorage.setItem("abs_user",JSON.stringify(user));document.cookie="abs_session="+encodeURIComponent(JSON.stringify(user))+"; path=/; max-age=31536000; SameSite=Lax"}
 function clearSession(){localStorage.removeItem("abs_user");document.cookie="abs_session=; path=/; max-age=0; SameSite=Lax"}
 const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("abs_theme")||"dark",data:null,admin:false};
 const ADMIN_USER="Shkadmin", ADMIN_PASS="Shk2005";
-const API_BASE=(window.ABS_API_BASE||`${location.origin}/api`).replace(/\/$/,"");
-async function adminAutoLogin(username,password){try{const r=await fetch(`${API_BASE}/admin/login`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username,password})});if(!r.ok)return false;const d=await r.json();if(d.token){sessionStorage.setItem("abs_admin_token",d.token);location.href="admin/";return true}}catch(e){}return false}
-function handleAndroidBack(){const modal=document.querySelector(".modal-backdrop");if(modal){closeModal();return true}if(state.admin){state.admin=false;return true}if(state.tab!=="dashboard"){goTab("dashboard");return true}return false}
-window.handleAndroidBack=handleAndroidBack;
 function dataKey(){return state.user?.mobile?`abs_data_${state.user.mobile}`:"abs_data"}
 function ensureData(){state.data=JSON.parse(localStorage.getItem(dataKey())||"null")||EMPTY_DATA();if(!state.data.settings)state.data.settings={};if(!Array.isArray(state.data.settings.categories))state.data.settings.categories=EMPTY_DATA().settings.categories.slice();if(!Array.isArray(state.data.settings.incomeCategories))state.data.settings.incomeCategories=["Salary","Freelance","Business","Bonus","Interest","Gift","Other"];if(!Array.isArray(state.data.settings.customCategories))state.data.settings.customCategories=[];return state.data}
 if(state.user){ensureData();} else {state.data=EMPTY_DATA();}
 state.data.settings=state.data.settings||EMPTY_DATA().settings; state.data.settings.categories=state.data.settings.categories||EMPTY_DATA().settings.categories; state.data.people=state.data.people||[]; state.data.ledger=state.data.ledger||[];
 const money=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:0});
-const save=()=>{if(!state.user?.mobile)return;localStorage.setItem(dataKey(),JSON.stringify(state.data));syncUserRegistry();};
+const save=()=>{if(!state.user?.mobile)return;localStorage.setItem(dataKey(),JSON.stringify(state.data));syncUserRegistry();cloudWriteData().catch(e=>console.warn("Firebase save failed; local copy retained.",e));};
 function userRegistry(){return JSON.parse(localStorage.getItem("abs_users")||"[]")}
 function nextAbsSerial(users){const nums=users.map(u=>String(u.absId||"").match(/(\d{4,})$/)).filter(Boolean).map(m=>Number(m[1])).filter(n=>Number.isFinite(n));return Math.max(1000,...nums)+1}
 function makeAbsId(mobile,serial){return `ABS${String(mobile||"").slice(-2)}${serial}`}
@@ -35,10 +83,10 @@ function incomeCategories(){ensureData();return state.data.settings.incomeCatego
 function typeOptions(){return ["Income","Expense","Ledger"]}
 function normalizeDate(v){if(!v)return new Date().toISOString().slice(0,10);v=String(v).trim();if(/^\d{4}-\d{2}-\d{2}$/.test(v))return v;const m=v.match(/^(\d{1,2})[-\/]([A-Za-z0-9]+)[-\/](\d{4})$/);if(m){const mon={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12}[m[2].toLowerCase()];const mm=mon||Number(m[2]);if(mm>=1&&mm<=12)return`${m[3]}-${String(mm).padStart(2,"0")}-${String(m[1]).padStart(2,"0")}`};return v}
 function feedbackList(){return JSON.parse(localStorage.getItem("abs_feedback")||"[]")}
-function saveFeedbackItem(item){const all=feedbackList();all.unshift(item);localStorage.setItem("abs_feedback",JSON.stringify(all))}
+function saveFeedbackItem(item){const all=feedbackList();all.unshift(item);localStorage.setItem("abs_feedback",JSON.stringify(all));if(cloudReady()&&absAuth.currentUser){absDb.collection("users").doc(absAuth.currentUser.uid).collection("feedback").doc(String(item.id)).set(item).catch(()=>{})}}
 function premiumRequests(){try{return JSON.parse(localStorage.getItem("abs_premium_requests")||"[]")}catch(e){return[]}}
 function isVerified(){const u=userRegistry().find(x=>x.mobile===state.user?.mobile);return u?.verified===true}
-function requestPremium(){if(!state.user)return; if(isVerified()){toast("Premium is already unlocked");return} const all=premiumRequests();if(all.some(x=>x.mobile===state.user.mobile&&x.status==="pending")){toast("Premium request is already pending");return}all.unshift({id:uid(),name:state.user.name,mobile:state.user.mobile,status:"pending",createdAt:new Date().toISOString()});localStorage.setItem("abs_premium_requests",JSON.stringify(all));renderProfile();toast("Premium request sent to admin") }
+function requestPremium(){if(!state.user)return; if(isVerified()){toast("Premium is already unlocked");return} const all=premiumRequests();if(all.some(x=>x.mobile===state.user.mobile&&x.status==="pending")){toast("Premium request is already pending");return}const item={id:uid(),name:state.user.name,mobile:state.user.mobile,status:"pending",createdAt:new Date().toISOString()};all.unshift(item);localStorage.setItem("abs_premium_requests",JSON.stringify(all));if(cloudReady()&&absAuth.currentUser)absDb.collection("premiumRequests").doc(String(item.id)).set(item).catch(()=>{});renderProfile();toast("Premium request sent to admin") }
 function refreshAppData(){if(!state.user)return;ensureData();syncUserRegistry();state.refreshToken=Date.now();render();if(state.tab==="dashboard")toast("Dashboard refreshed")}
 function animateMoney(selector,target,duration=900){const el=$(selector);if(!el)return;const start=Number(el.dataset.current||0);const end=Number(target||0);const t0=performance.now();const ease=t=>1-Math.pow(1-t,3);function tick(now){const p=Math.min(1,(now-t0)/duration);const val=start+(end-start)*ease(p);el.textContent=money(val);if(p<1)requestAnimationFrame(tick);else{el.dataset.current=String(end);el.textContent=money(end)}}requestAnimationFrame(tick)}
 
@@ -48,39 +96,82 @@ function adminFormatDate(v){if(!v)return "—";const d=new Date(v);return isNaN(
 function openAdminPanel(){if(!state.admin)return openAdminLogin();const users=userRegistry(),feedback=feedbackList();const totalIncome=users.reduce((s,u)=>s+Number(u.income||0),0),totalExpense=users.reduce((s,u)=>s+Number(u.expense||0),0);openModal("ABS Admin",`<div class="admin-panel"><div class="admin-hero"><div><div class="eyebrow">ABS CONTROL CENTER</div><h3>Administration</h3><p>Review registered users and all submitted feedback on this device.</p></div><button class="admin-logout" onclick="state.admin=false;closeModal()">LOGOUT</button></div><div class="admin-stats"><div><small>Users</small><b>${users.length}</b></div><div><small>Feedback</small><b>${feedback.length}</b></div><div><small>Total Income</small><b>${money(totalIncome)}</b></div><div><small>Total Expense</small><b>${money(totalExpense)}</b></div></div><div class="admin-section"><div class="admin-section-title"><div><div class="eyebrow">USER MANAGEMENT</div><h4>Registered Users</h4></div><span>${users.length} accounts</span></div>${users.length?`<div class="admin-user-list">${users.map(u=>`<div class="admin-user-card"><div class="admin-user-top"><div class="admin-avatar">${esc((u.name||"U").slice(0,1).toUpperCase())}</div><div><b>${esc(u.name||"User")}</b><small>${esc(u.mobile||"")}</small></div><strong>${money(u.net||0)}</strong></div><div class="admin-user-grid"><span><small>Income</small><b>${money(u.income||0)}</b></span><span><small>Expense</small><b>${money(u.expense||0)}</b></span><span><small>Entries</small><b>${u.entries||0}</b></span><span><small>Last active</small><b>${esc(adminFormatDate(u.lastActive))}</b></span></div><div class="admin-user-actions"><span class="password-safe">🔒 Password hidden for security</span><button onclick="adminResetUserPassword(${JSON.stringify(u.mobile)})">RESET PASSWORD</button></div></div>`).join("")}</div>`:`<div class="admin-empty">No registered users yet.</div>`}</div><div class="admin-section"><div class="admin-section-title"><div><div class="eyebrow">USER VOICE</div><h4>All Feedback</h4></div><span>${feedback.length} submissions</span></div>${feedback.length?`<div class="feedback-admin-list">${feedback.map(f=>`<div class="feedback-admin-card"><div class="feedback-admin-top"><div><b>${esc(f.name||"User")}</b><small>${esc(f.mobile||"")} · ${esc(f.type||"Feedback")}</small></div><div class="feedback-stars">${"★".repeat(Number(f.rating||0))}${"☆".repeat(5-Number(f.rating||0))}</div></div><p>${esc(f.message||"")}</p><div class="feedback-admin-foot"><span>${esc(adminFormatDate(f.createdAt))}</span><button onclick="deleteFeedback(${JSON.stringify(f.id)})">DELETE</button></div></div>`).join("")}</div>`:`<div class="admin-empty">No feedback submitted yet.</div>`}</div><div class="admin-security-note"><b>Security note</b><span>User passwords are not displayed in the admin panel. The panel provides a controlled password reset instead.</span></div></div>`)}
 function adminResetUserPassword(mobile){if(!state.admin)return;openModal("Reset User Password",`<div class="workspace-hero"><div class="workspace-icon">🔒</div><div><div class="eyebrow">ACCOUNT SECURITY</div><h3>Set a new password</h3><p>Password for <b>${esc(mobile)}</b> will be replaced. The existing password is never revealed.</p></div></div><form id="adminResetForm" class="professional-form"><label class="field"><span>New Password</span><div class="field-control"><input id="adminNewPassword" type="password" minlength="6" required placeholder="Minimum 6 characters"></div></label><label class="field"><span>Confirm Password</span><div class="field-control"><input id="adminNewPassword2" type="password" minlength="6" required placeholder="Repeat password"></div></label><button class="primary full">UPDATE PASSWORD</button></form>`);$("#adminResetForm").onsubmit=e=>{e.preventDefault();const a=$("#adminNewPassword").value,b=$("#adminNewPassword2").value;if(a!==b)return toast("Passwords do not match");localStorage.setItem(`abs_password_${mobile}`,a);closeModal();toast("User password updated");openAdminPanel()}}
 function deleteFeedback(id){if(!state.admin)return;if(!confirm("Delete this feedback?"))return;localStorage.setItem("abs_feedback",JSON.stringify(feedbackList().filter(x=>x.id!==id)));openAdminPanel();toast("Feedback deleted")}
-function setup(){document.body.classList.toggle("light",state.theme==="light");if(state.user){const rec=ensureAbsIds().find(u=>u.mobile===state.user.mobile);if(rec)state.user.absId=rec.absId;const exists=userRegistry().some(u=>u.mobile===state.user.mobile);if(!exists){clearSession();state.user=null;state.data=EMPTY_DATA();}else{ensureData();$("#authScreen").classList.add("hidden");$("#mainApp").classList.remove("hidden");$("#greeting").textContent=greet(state.user.name);render();return}}$("#authScreen").classList.remove("hidden");$("#mainApp").classList.add("hidden")}
+async function setup(){document.body.classList.toggle("light",state.theme==="light");if(state.user){
+  const rec=ensureAbsIds().find(u=>u.mobile===state.user.mobile); if(rec)state.user.absId=rec.absId;
+  const exists=userRegistry().some(u=>u.mobile===state.user.mobile);
+  if(!exists){clearSession();state.user=null;state.data=EMPTY_DATA();}
+  else{
+    ensureData();
+    if(cloudReady() && absAuth.currentUser){ await cloudLoadForCurrentUser(); }
+    $("#authScreen").classList.add("hidden");$("#mainApp").classList.remove("hidden");$("#greeting").textContent=greet(state.user.name);render();return;
+  }}$("#authScreen").classList.remove("hidden");$("#mainApp").classList.add("hidden")}
 $("#showRegister").onclick=()=>{$("#loginPanel").classList.add("hidden");$("#registerPanel").classList.remove("hidden")};$("#showLogin").onclick=()=>{$("#registerPanel").classList.add("hidden");$("#loginPanel").classList.remove("hidden")};
-$("#registerForm").onsubmit=e=>{e.preventDefault();let n=$("#regName").value.trim(),m=$("#regMobile").value.trim(),p=$("#regPassword").value,c=$("#regConfirm").value;if(!/^[6-9]\d{9}$/.test(m))return $("#regMsg").textContent="Enter a valid 10-digit Indian mobile number.";if(p!==c)return $("#regMsg").textContent="Passwords do not match.";state.user={name:n,mobile:m};state.data=EMPTY_DATA();ensureData();save();persistSession(state.user);localStorage.setItem(`abs_password_${m}`,p);const users=userRegistry();if(!users.some(u=>u.mobile===m)){const serial=nextAbsSerial(users);users.push({name:n,mobile:m,absSerial:serial,absId:makeAbsId(m,serial),createdAt:new Date().toISOString(),income:0,expense:0,net:0,entries:0});}localStorage.setItem("abs_users",JSON.stringify(users));setup()}
-$("#loginForm").onsubmit=async e=>{e.preventDefault();let m=$("#loginMobile").value.trim(),p=$("#loginPassword").value;if(m===ADMIN_USER&&p===ADMIN_PASS){$("#authMsg").textContent="";if(await adminAutoLogin(m,p))return;state.admin=true;openAdminPanel();return}if(!/^[6-9]\d{9}$/.test(m)&&!/^ABS\d+$/i.test(m))return $("#authMsg").textContent="Enter a valid 10-digit mobile number or ABS ID.";const users=userRegistry(),u=users.find(x=>x.mobile===m||String(x.absId||x.abs_id||'').toUpperCase()===m.toUpperCase());const mobile=u?.mobile||m;const stored=localStorage.getItem(`abs_password_${mobile}`);if(!u||stored===null)return $("#authMsg").textContent="Account not found on this device.";if(p!==stored)return $("#authMsg").textContent="Incorrect login details.";state.user={name:u.name,mobile:u.mobile};persistSession(state.user);ensureData();setup()};
-$("#themeBtn").onclick=()=>{state.theme=state.theme==="dark"?"light":"dark";localStorage.setItem("abs_theme",state.theme);setup()};
-$("#refreshBtn").onclick=refreshAppData;
-function goTab(tab){try{state.tab=tab||"dashboard";document.querySelectorAll(".nav-item").forEach(x=>x.classList.toggle("active",x.dataset.tab===state.tab));render();}catch(err){console.error("ABS navigation error",err);if(state.tab==="profile")renderProfile();else toast("Unable to open this section. Please try again.")}}
-document.querySelectorAll(".nav-item").forEach(b=>{b.type="button";b.addEventListener("click",e=>{e.preventDefault();goTab(b.dataset.tab);});});
-function openAvatarPicker(){
-  openModal("Profile Picture",`<div class="avatar-picker"><div class="avatar-upload-hero"><div class="avatar-upload-icon">📷</div><div><b>Update your profile photo</b><p class="muted">Upload a photo and choose exactly which part appears in your DP.</p></div></div><label class="upload-photo">📷 Upload Photo<input id="avatarFile" type="file" accept="image/*" hidden></label><p class="muted avatar-choice-label">Choose an avatar</p><div class="avatar-options big"><button type="button" onclick="setAvatar('👦')">👦</button><button type="button" onclick="setAvatar('👧')">👧</button><button type="button" onclick="setAvatar('👨')">👨</button><button type="button" onclick="setAvatar('👩')">👩</button><button type="button" onclick="setAvatar('🙂')">🙂</button></div></div>`);
-  $("#avatarFile").onchange=e=>{const f=e.target.files?.[0];if(!f)return;if(!f.type.startsWith("image/"))return toast("Please choose an image");const r=new FileReader();r.onload=()=>openAvatarCropper(r.result);r.readAsDataURL(f)}
-}
-function openAvatarCropper(dataUrl){
-  openModal("Adjust Profile Photo",`<div class="crop-editor"><p class="crop-editor-copy">Drag the photo to move it and use the slider to zoom. The circle shows exactly what will become your DP.</p><div class="crop-stage" id="cropStage"><canvas id="cropCanvas" width="640" height="640"></canvas></div><div class="crop-control"><label><span>Zoom</span><b id="cropZoomValue">1.0×</b></label><input id="cropZoom" type="range" min="1" max="3" step="0.01" value="1"></div><div class="crop-actions"><button type="button" class="ghost" id="cropCancel">Cancel</button><button type="button" class="primary" id="cropSave">Save Photo</button></div></div>`);
-  const canvas=$("#cropCanvas"),ctx=canvas.getContext("2d"),stage=$("#cropStage"),range=$("#cropZoom"),zoomValue=$("#cropZoomValue");
-  const img=new Image();
-  let scale=1,offsetX=0,offsetY=0,baseScale=1,dragging=false,lastX=0,lastY=0;
-  const clamp=()=>{const drawW=img.naturalWidth*baseScale*scale,drawH=img.naturalHeight*baseScale*scale;const maxX=Math.max(0,(drawW-640)/2),maxY=Math.max(0,(drawH-640)/2);offsetX=Math.max(-maxX,Math.min(maxX,offsetX));offsetY=Math.max(-maxY,Math.min(maxY,offsetY));};
-  const draw=()=>{if(!img.naturalWidth)return;ctx.clearRect(0,0,640,640);ctx.fillStyle="#050811";ctx.fillRect(0,0,640,640);const drawW=img.naturalWidth*baseScale*scale,drawH=img.naturalHeight*baseScale*scale;ctx.drawImage(img,320-drawW/2+offsetX,320-drawH/2+offsetY,drawW,drawH);};
-  img.onload=()=>{baseScale=Math.max(640/img.naturalWidth,640/img.naturalHeight);scale=1;offsetX=0;offsetY=0;draw()};
-  img.src=dataUrl;
-  range.oninput=()=>{scale=Number(range.value);zoomValue.textContent=scale.toFixed(2)+"×";clamp();draw()};
-  const point=e=>{const p=e.touches?.[0]||e;return{x:p.clientX,y:p.clientY}};
-  const down=e=>{e.preventDefault();dragging=true;const p=point(e);lastX=p.x;lastY=p.y};
-  const move=e=>{if(!dragging)return;e.preventDefault();const p=point(e);offsetX+=p.x-lastX;offsetY+=p.y-lastY;lastX=p.x;lastY=p.y;clamp();draw()};
-  const up=()=>dragging=false;
-  stage.addEventListener("pointerdown",down);stage.addEventListener("pointermove",move);stage.addEventListener("pointerup",up);stage.addEventListener("pointercancel",up);stage.addEventListener("pointerleave",up);
-  $("#cropCancel").onclick=()=>openAvatarPicker();
-  $("#cropSave").onclick=()=>{clamp();draw();const out=document.createElement("canvas");out.width=512;out.height=512;const o=out.getContext("2d");o.drawImage(canvas,0,0,512,512);localStorage.setItem("abs_avatar",out.toDataURL("image/jpeg",.92));localStorage.removeItem("abs_avatar_emoji");closeModal();renderProfile();toast("Profile photo updated")};
-}
-
-function setAvatar(v){localStorage.setItem("abs_avatar_emoji",v);localStorage.removeItem("abs_avatar");closeModal();renderProfile();toast("Avatar updated")}
-function toggleTheme(){state.theme=state.theme==="dark"?"light":"dark";localStorage.setItem("abs_theme",state.theme);setup();}
+$("#registerForm").onsubmit=async e=>{
+  e.preventDefault();
+  const n=$("#regName").value.trim(),m=$("#regMobile").value.trim(),p=$("#regPassword").value,c=$("#regConfirm").value;
+  if(!n)return $("#regMsg").textContent="Enter your name.";
+  if(!/^[6-9]\d{9}$/.test(m))return $("#regMsg").textContent="Enter a valid 10-digit Indian mobile number.";
+  if(p.length<6)return $("#regMsg").textContent="Password must be at least 6 characters.";
+  if(p!==c)return $("#regMsg").textContent="Passwords do not match.";
+  try {
+    const users=userRegistry();
+    if(users.some(u=>u.mobile===m)) return $("#regMsg").textContent="Mobile number already registered on this device.";
+    let cred;
+    if(cloudReady()){
+      cred=await absAuth.createUserWithEmailAndPassword(cloudEmail(m),p);
+    }
+    const serial=nextAbsSerial(users);
+    const absId=makeAbsId(m,serial);
+    state.user={name:n,mobile:m,absId}; state.data=EMPTY_DATA();
+    users.push({name:n,mobile:m,absSerial:serial,absId,createdAt:new Date().toISOString(),income:0,expense:0,net:0,entries:0});
+    localStorage.setItem("abs_users",JSON.stringify(users));
+    localStorage.setItem(`abs_password_${m}`,p);
+    persistSession(state.user); ensureData(); localStorage.setItem(dataKey(),JSON.stringify(state.data));
+    if(cred) await cloudWriteData();
+    setup();
+  } catch(err){
+    console.error(err);
+    const msg=err?.code==='auth/email-already-in-use'?"This mobile number is already registered.":(err?.message||"Account creation failed.");
+    $("#regMsg").textContent=msg;
+  }
+};
+$("#loginForm").onsubmit=async e=>{
+  e.preventDefault();
+  const m=$("#loginMobile").value.trim(),p=$("#loginPassword").value;
+  if(m===ADMIN_USER&&p===ADMIN_PASS){$("#authMsg").textContent="";state.admin=true;openAdminPanel();return}
+  if(!/^[6-9]\d{9}$/.test(m)&&!/^ABS\d+$/i.test(m))return $("#authMsg").textContent="Enter a valid 10-digit mobile number or ABS ID.";
+  try {
+    let identifier=m, u=userRegistry().find(x=>x.mobile===m||String(x.absId||x.abs_id||'').toUpperCase()===m.toUpperCase());
+    const mobile=u?.mobile||m;
+    if(cloudReady()){
+      if(!u && !/^[6-9]\d{9}$/.test(m)) return $("#authMsg").textContent="Account not found.";
+      await absAuth.signInWithEmailAndPassword(cloudEmail(mobile),p);
+      state.user={name:u?.name||mobile,mobile};
+      await cloudLoadForCurrentUser();
+      setup();
+      return;
+    }
+    const stored=localStorage.getItem(`abs_password_${mobile}`);
+    if(!u||stored===null)return $("#authMsg").textContent="Account not found on this device.";
+    if(p!==stored)return $("#authMsg").textContent="Incorrect login details.";
+    state.user={name:u.name,mobile:u.mobile};persistSession(state.user);ensureData();setup();
+  } catch(err){
+    console.error(err);
+    // One-time migration path for older localStorage accounts.
+    if(cloudReady() && err?.code==='auth/user-not-found'){
+      try{
+        const localUser=userRegistry().find(x=>x.mobile===mobile);
+        const localPass=localStorage.getItem(`abs_password_${mobile}`);
+        if(localUser && localPass===p){
+          await absAuth.createUserWithEmailAndPassword(cloudEmail(mobile),p);
+          state.user={name:localUser.name,mobile:localUser.mobile,absId:localUser.absId};
+          ensureData(); persistSession(state.user); await cloudWriteData(); setup(); return;
+        }
+      }catch(migrationErr){ console.error(migrationErr); }
+    }
+    $("#authMsg").textContent=err?.code==='auth/invalid-credential'?"Incorrect login details.":(err?.message||"Login failed.");
+  }
+};
 function openProfileEdit(){
   const rec=currentUserRecord()||{};
   const avatar=localStorage.getItem("abs_avatar");
@@ -122,7 +213,7 @@ function openProfileEdit(){
     u.absId=u.absId||state.user.absId||makeAbsId(mobile,u.absSerial||nextAbsSerial(users));
     localStorage.setItem("abs_users",JSON.stringify(users));
     state.user={...state.user,name:n,mobile,absId:u.absId||state.user.absId};
-    persistSession(state.user); ensureData();
+    persistSession(state.user); ensureData(); cloudWriteUser().catch(()=>{});
     $("#greeting").textContent=greet(n);
     renderProfile(); toast("Profile updated successfully");
   };
@@ -134,7 +225,7 @@ function openAboutApp(){
   $("#aboutBack").onclick=()=>renderProfile();
   renderFooter();
 }
-function openPassword(){openModal("Change Password",`<div class="profile-edit-hero"><div class="profile-edit-icon">🔒</div><div><div class="eyebrow">ACCOUNT SECURITY</div><h3>Change your password</h3><p>Use a strong password that only you know.</p></div></div><form id="passForm" class="professional-form"><label class="field"><span>Current Password</span><div class="field-control"><input id="oldPass" type="password" autocomplete="current-password" required></div></label><label class="field"><span>New Password</span><div class="field-control"><input id="newPass" type="password" minlength="6" autocomplete="new-password" required></div></label><label class="field"><span>Confirm Password</span><div class="field-control"><input id="newPass2" type="password" minlength="6" autocomplete="new-password" required></div></label><button class="primary full">UPDATE PASSWORD</button></form>`);$("#passForm").onsubmit=e=>{e.preventDefault();if($("#oldPass").value!==localStorage.getItem(`abs_password_${state.user.mobile}`))return toast("Current password is incorrect");if($("#newPass").value!==$("#newPass2").value)return toast("Passwords do not match");localStorage.setItem(`abs_password_${state.user.mobile}`,$("#newPass").value);closeModal();toast("Password changed successfully")}}
+function openPassword(){openModal("Change Password",`<div class="profile-edit-hero"><div class="profile-edit-icon">🔒</div><div><div class="eyebrow">ACCOUNT SECURITY</div><h3>Change your password</h3><p>Use a strong password that only you know.</p></div></div><form id="passForm" class="professional-form"><label class="field"><span>Current Password</span><div class="field-control"><input id="oldPass" type="password" autocomplete="current-password" required></div></label><label class="field"><span>New Password</span><div class="field-control"><input id="newPass" type="password" minlength="6" autocomplete="new-password" required></div></label><label class="field"><span>Confirm Password</span><div class="field-control"><input id="newPass2" type="password" minlength="6" autocomplete="new-password" required></div></label><button class="primary full">UPDATE PASSWORD</button></form>`);$("#passForm").onsubmit=async e=>{e.preventDefault();if($("#oldPass").value!==localStorage.getItem(`abs_password_${state.user.mobile}`))return toast("Current password is incorrect");if($("#newPass").value!==$("#newPass2").value)return toast("Passwords do not match");try{if(cloudReady()&&absAuth.currentUser)await absAuth.currentUser.updatePassword($("#newPass").value);localStorage.setItem(`abs_password_${state.user.mobile}`,$("#newPass").value);closeModal();toast("Password changed successfully")}catch(err){toast(err?.code==='auth/requires-recent-login'?"Please login again, then change your password.":"Password update failed")}}}
 function exportData(){exportPDF()}
 function renderProfile(){
   const screenEl=document.getElementById("screen");
@@ -309,11 +400,11 @@ try{
 
 doc.setFontSize(22);doc.text("ABS STATEMENT",M+58,45);doc.setFont("helvetica","normal");doc.setFontSize(9);doc.text("PERSONAL FINANCE REPORT",M+59,61);doc.setTextColor(...ink);doc.setFontSize(10);doc.text(`Account: ${short(state.user?.name||"User")}`,M,108);doc.text(`Mobile: ${short(state.user?.mobile||"")}`,M,123);doc.text(`Generated: ${new Date().toLocaleString("en-IN")}`,W-M,108,{align:"right"});doc.text(`Period: All recorded activity`,W-M,123,{align:"right"})}function footer(){doc.setDrawColor(220,223,230);doc.line(M,H-42,W-M,H-42);doc.setTextColor(...muted);doc.setFontSize(8);doc.text("ABS DASHBOARD · Confidential personal finance statement",M,H-27);doc.text(`Page ${page}`,W-M,H-27,{align:"right"})}function newPage(){footer();doc.addPage();page++;header()}function card(x,y,w,h,label,value,color){doc.setFillColor(...soft);doc.roundedRect(x,y,w,h,10,10,"F");doc.setTextColor(...muted);doc.setFont("helvetica","bold");doc.setFontSize(8);doc.text(label.toUpperCase(),x+12,y+18);doc.setTextColor(...color);doc.setFontSize(14);doc.text(fmt(value),x+12,y+39)}header();let y=150;doc.setTextColor(...ink);doc.setFont("helvetica","bold");doc.setFontSize(12);doc.text("ACCOUNT OVERVIEW",M,y);y+=14;const gap=10,cw=(W-2*M-gap)/2;card(M,y,cw,54,"Total Income",t.income,green);card(M+cw+gap,y,cw,54,"Total Expenses",t.expense,red);y+=66;card(M,y,cw,54,"Net Savings",t.net,t.net>=0?green:red);card(M+cw+gap,y,cw,54,"EMI Paid",t.emi,accent);y+=66;card(M,y,cw,54,"To Receive",l.receive,green);card(M+cw+gap,y,cw,54,"To Pay",l.pay,red);y+=82;doc.setTextColor(...ink);doc.setFontSize(12);doc.text("MONEY MOVEMENT",M,y);y+=20;doc.setFillColor(...ink);doc.roundedRect(M,y,W-2*M,30,6,6,"F");doc.setTextColor(255,255,255);doc.setFontSize(8);doc.text("CATEGORY",M+12,y+19);doc.text("COUNT",M+230,y+19,{align:"right"});doc.text("AMOUNT",W-M-12,y+19,{align:"right"});y+=30;const overview=[["Income",state.data.income.length,t.income], ["Expenses",state.data.expenses.length,t.expense], ["Loan Principal",state.data.loans.length,t.loan], ["EMI Payments",state.data.emi.length,t.emi], ["Lena / Dena",state.data.ledger.length,state.data.ledger.reduce((s,x)=>s+Number(x.amount||0),0)]];overview.forEach((r,i)=>{if(i%2===0)doc.setFillColor(249,250,252);else doc.setFillColor(255,255,255);doc.rect(M,y,W-2*M,25,"F");doc.setTextColor(...ink);doc.setFont("helvetica","normal");doc.setFontSize(8.5);doc.text(r[0],M+12,y+16);doc.text(String(r[1]),M+230,y+16,{align:"right"});doc.setFont("helvetica","bold");doc.text(fmt(r[2]),W-M-12,y+16,{align:"right"});y+=25});y+=25;doc.setTextColor(...ink);doc.setFont("helvetica","bold");doc.setFontSize(12);doc.text("TRANSACTION DETAIL",M,y);y+=18;const rows=[...state.data.income.map(x=>({...x,type:"INCOME",desc:x.description||x.source||"Income",credit:Number(x.amount||0),debit:0})),...state.data.expenses.map(x=>({...x,type:"EXPENSE",desc:x.description||x.category||"Expense",credit:0,debit:Number(x.amount||0)})),...state.data.emi.map(x=>({...x,type:"EMI",desc:x.remarks||x.loan||"EMI payment",credit:0,debit:Number(x.amount||0)})),...state.data.ledger.map(x=>{const d=x.direction;const credit=["lena","receive"].includes(d)?Number(x.amount||0):0;const debit=["dena","pay"].includes(d)?Number(x.amount||0):0;return {...x,type:"LEDGER",desc:`${x.person||"Person"} · ${x.directionLabel||d||"Ledger"}`,credit,debit}})].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||"")));let balance=0;const drawTableHead=()=>{doc.setFillColor(...ink);doc.roundedRect(M,y,W-2*M,28,5,5,"F");doc.setTextColor(255,255,255);doc.setFont("helvetica","bold");doc.setFontSize(7.5);doc.text("DATE",M+9,y+18);doc.text("TYPE",M+70,y+18);doc.text("DESCRIPTION",M+115,y+18);doc.text("MODE",M+300,y+18);doc.text("CREDIT",M+390,y+18,{align:"right"});doc.text("DEBIT",M+455,y+18,{align:"right"});doc.text("BALANCE",W-M-9,y+18,{align:"right"});y+=28};drawTableHead();rows.forEach((x,idx)=>{if(y>H-75){newPage();y=150;doc.setTextColor(...ink);doc.setFont("helvetica","bold");doc.setFontSize(11);doc.text("TRANSACTION DETAIL · CONTINUED",M,y);y+=14;drawTableHead()}balance+=Number(x.credit||0)-Number(x.debit||0);if(idx%2===0)doc.setFillColor(249,250,252);else doc.setFillColor(255,255,255);doc.rect(M,y,W-2*M,22,"F");doc.setTextColor(...ink);doc.setFont("helvetica","normal");doc.setFontSize(7);doc.text(String(x.date||"").slice(0,10),M+9,y+14);doc.text(short(x.type).slice(0,8),M+70,y+14);doc.text(short(x.desc).slice(0,29),M+115,y+14);doc.text(short(x.mode||"—").slice(0,13),M+300,y+14);if(x.credit)doc.setTextColor(...green);doc.text(x.credit?fmt(x.credit):"—",M+390,y+14,{align:"right"});if(x.debit)doc.setTextColor(...red);doc.text(x.debit?fmt(x.debit):"—",M+455,y+14,{align:"right"});doc.setTextColor(...ink);doc.text(fmt(balance),W-M-9,y+14,{align:"right"});y+=22});if(!rows.length){doc.setTextColor(...muted);doc.setFont("helvetica","normal");doc.setFontSize(9);doc.text("No transactions recorded yet.",M+10,y+18);y+=30}y+=18;if(y>H-110){newPage();y=150}doc.setFillColor(...ink);doc.roundedRect(M,y,W-2*M,58,9,9,"F");doc.setTextColor(255,255,255);doc.setFont("helvetica","bold");doc.setFontSize(10);doc.text("STATEMENT TOTALS",M+14,y+19);doc.setFontSize(8);doc.setFont("helvetica","normal");doc.text(`Income ${fmt(t.income)}   ·   Expenses ${fmt(t.expense)}   ·   EMI ${fmt(t.emi)}`,M+14,y+34);doc.text(`Net Savings ${fmt(t.net)}   ·   To Receive ${fmt(l.receive)}   ·   To Pay ${fmt(l.pay)}`,M+14,y+48);footer();doc.save(`ABS-Statement-${new Date().toISOString().slice(0,10)}.pdf`)}
 function resetFinancialData(){openModal("Smart Fresh",`<div class="danger-zone"><div class="workspace-hero"><div class="workspace-icon">🧹</div><div><div class="eyebrow">PROTECTED RESET</div><h3>Clear financial data</h3><p>This permanently clears income, expenses, loans, EMI, people and ledger records for this account.</p></div></div><form id="freshForm"><label class="field"><span>Account Password</span><div class="field-control"><input id="freshPassword" type="password" required placeholder="Enter your account password"></div></label><label class="field"><span>Type RESET to confirm</span><div class="field-control"><input id="freshConfirm" required placeholder="RESET"></div></label><button class="danger full" type="submit">DELETE FINANCIAL DATA</button></form></div>`);$("#freshForm").onsubmit=e=>{e.preventDefault();if($("#freshPassword").value!==localStorage.getItem(`abs_password_${state.user.mobile}`))return toast("Incorrect password");if($("#freshConfirm").value.trim()!=="RESET")return toast("Type RESET to confirm");state.data=EMPTY_DATA();save();closeModal();render();toast("Financial data reset to zero")}}
-function logout(){clearSession();state.user=null;setup()}
+function logout(){if(cloudReady()&&absAuth.currentUser)absAuth.signOut().catch(()=>{});clearSession();state.user=null;setup()}
 function openModal(title,body){$("#modalRoot").innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><h2>${esc(title)}</h2><button class="close" onclick="closeModal()">×</button></div>${body}</div></div>`}
 function closeModal(){$("#modalRoot").innerHTML=""}
 window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=openHistory;window.addCategory=addCategory;window.removeCategory=removeCategory;window.editHistoryEntry=editHistoryEntry;window.exportPDF=exportPDF;window.openFeature=openFeature;window.openEditRecords=openEditRecords;window.closeModal=closeModal;window.renderDashboard=renderDashboard;window.setChartRange=setChartRange;window.openProfileEdit=openProfileEdit;window.openPassword=openPassword;window.toggleTheme=toggleTheme;window.exportData=exportData;window.openAvatarPicker=openAvatarPicker;window.setAvatar=setAvatar;window.logout=logout;window.openPeople=openPeople;window.openPersonForm=openPersonForm;window.openLedger=openLedger;window.openLedgerForm=openLedgerForm;window.processBulkImport=processBulkImport;window.downloadBulkTemplate=downloadBulkTemplate;window.resetFinancialData=resetFinancialData;window.openStatement=openStatement;window.exportStatementPDF=exportStatementPDF;window.requestPremium=requestPremium;window.refreshAppData=refreshAppData;window.goTab=goTab;
-setup();
+if (cloudReady()) { absAuth.onAuthStateChanged(()=>setup()); } else { setup(); }
 
 /* ABS i18n expansion: Hindi translates the app UI while the top greeting and user name stay English. */
 Object.assign(HI_UI,{
