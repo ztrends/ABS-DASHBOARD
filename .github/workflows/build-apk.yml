@@ -32,7 +32,16 @@ jobs:
           cd frontend
           rm -rf www
           mkdir -p www
-          cp -r index.html manifest.json sw.js assets css js admin www
+
+          cp index.html www/index.html
+
+          if [ -d assets ]; then cp -R assets www/assets; fi
+          if [ -d css ]; then cp -R css www/css; fi
+          if [ -d js ]; then cp -R js www/js; fi
+          if [ -d admin ]; then cp -R admin www/admin; fi
+
+          echo "Web files prepared successfully"
+          find www -maxdepth 2 -type f | head -100
 
       - name: Initialize Capacitor
         run: |
@@ -44,6 +53,7 @@ jobs:
       - name: Fix Kotlin dependency conflict
         run: |
           cd frontend/android
+
           python3 - <<'PY'
           from pathlib import Path
 
@@ -58,7 +68,7 @@ jobs:
           """
 
           if "kotlin-stdlib-jdk8" not in s:
-              s = block + "\\n" + s
+              s = block + "\n" + s
 
           p.write_text(s)
           PY
