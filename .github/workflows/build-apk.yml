@@ -32,7 +32,7 @@ jobs:
           cd frontend
           rm -rf www
           mkdir -p www
-          cp -r index.html manifest.json sw.js assets css js admin www/
+          cp -r index.html manifest.json sw.js assets css js admin www
 
       - name: Initialize Capacitor
         run: |
