@@ -1,86 +1,53 @@
 name: Build ABS DASHBOARD APK
-
 on:
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '21'
-
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: '21'}
       - name: Install Capacitor
-        run: |
-          cd frontend
-          npm install @capacitor/core @capacitor/cli @capacitor/android
-
+        run: cd frontend && npm install @capacitor/core @capacitor/cli @capacitor/android
       - name: Prepare web files
         run: |
           cd frontend
-          rm -rf www
-          mkdir -p www
-
+          rm -rf www && mkdir -p www
           cp index.html www/index.html
-
-          if [ -d assets ]; then cp -R assets www/assets; fi
-          if [ -d css ]; then cp -R css www/css; fi
-          if [ -d js ]; then cp -R js www/js; fi
-          if [ -d admin ]; then cp -R admin www/admin; fi
-
-          echo "Web files prepared successfully"
-          find www -maxdepth 2 -type f | head -100
-
+          for d in assets css js admin; do if [ -d "$d" ]; then cp -R "$d" www/; fi; done
+          cp manifest.json www/manifest.json 2>/dev/null || true
+          cp sw.js www/sw.js 2>/dev/null || true
       - name: Initialize Capacitor
+        run: cd frontend && npx cap init "ABS DASHBOARD" "com.absdashboard.app" --web-dir www && npx cap add android && npx cap sync android
+      - name: Add safe Android back handling
         run: |
-          cd frontend
-          npx cap init "ABS DASHBOARD" "com.absdashboard.app" --web-dir www
-          npx cap add android
-          npx cap sync android
-
+          cd frontend/android
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/absdashboard/app/MainActivity.java')
+          if p.exists():
+              s=p.read_text()
+              if 'handleAndroidBack' not in s:
+                  i=s.rfind('}')
+                  method='''\n    @Override\n    public void onBackPressed() {\n        getBridge().getWebView().evaluateJavascript("window.handleAndroidBack ? String(window.handleAndroidBack()) : 'false'", value -> {\n            if (!"\\\"true\\\"".equals(value)) MainActivity.super.onBackPressed();\n        });\n    }\n'''
+                  p.write_text(s[:i]+method+s[i:])
+          PY
       - name: Fix Kotlin dependency conflict
         run: |
           cd frontend/android
-
           python3 - <<'PY'
           from pathlib import Path
-
-          p = Path("app/build.gradle")
-          s = p.read_text()
-
-          block = """
-          configurations.configureEach {
-              exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"
-              exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"
-          }
-          """
-
-          if "kotlin-stdlib-jdk8" not in s:
-              s = block + "\n" + s
-
+          p=Path('app/build.gradle'); s=p.read_text()
+          block='''configurations.configureEach {\n    exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"\n    exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"\n}\n'''
+          if 'kotlin-stdlib-jdk8' not in s: s=block+s
           p.write_text(s)
           PY
-
       - name: Build APK
-        run: |
-          cd frontend/android
-          chmod +x gradlew
-          ./gradlew clean assembleDebug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+        run: cd frontend/android && chmod +x gradlew && ./gradlew clean assembleDebug
+      - uses: actions/upload-artifact@v4
         with:
           name: ABS-DASHBOARD-APK
           path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
