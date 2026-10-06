@@ -52,7 +52,29 @@ $("#themeBtn").onclick=()=>{state.theme=state.theme==="dark"?"light":"dark";loca
 $("#refreshBtn").onclick=refreshAppData;
 function goTab(tab){try{state.tab=tab||"dashboard";document.querySelectorAll(".nav-item").forEach(x=>x.classList.toggle("active",x.dataset.tab===state.tab));render();}catch(err){console.error("ABS navigation error",err);if(state.tab==="profile")renderProfile();else toast("Unable to open this section. Please try again.")}}
 document.querySelectorAll(".nav-item").forEach(b=>{b.type="button";b.addEventListener("click",e=>{e.preventDefault();goTab(b.dataset.tab);});});
-function openAvatarPicker(){openModal("Profile Picture",`<div class="avatar-picker"><div class="avatar-upload-hero"><div class="avatar-upload-icon">📷</div><div><b>Update your profile photo</b><p class="muted">Upload a photo or choose an avatar below.</p></div></div><label class="upload-photo">📷 Upload Photo<input id="avatarFile" type="file" accept="image/*" hidden></label><p class="muted avatar-choice-label">Choose an avatar</p><div class="avatar-options big"><button type="button" onclick="setAvatar('👦')">👦</button><button type="button" onclick="setAvatar('👧')">👧</button><button type="button" onclick="setAvatar('👨')">👨</button><button type="button" onclick="setAvatar('👩')">👩</button><button type="button" onclick="setAvatar('🙂')">🙂</button></div></div>`);$("#avatarFile").onchange=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>{localStorage.setItem("abs_avatar",r.result);localStorage.removeItem("abs_avatar_emoji");closeModal();renderProfile();toast("Profile photo updated")};r.readAsDataURL(f)}}
+function openAvatarPicker(){
+  openModal("Profile Picture",`<div class="avatar-picker"><div class="avatar-upload-hero"><div class="avatar-upload-icon">📷</div><div><b>Update your profile photo</b><p class="muted">Upload a photo and choose exactly which part appears in your DP.</p></div></div><label class="upload-photo">📷 Upload Photo<input id="avatarFile" type="file" accept="image/*" hidden></label><p class="muted avatar-choice-label">Choose an avatar</p><div class="avatar-options big"><button type="button" onclick="setAvatar('👦')">👦</button><button type="button" onclick="setAvatar('👧')">👧</button><button type="button" onclick="setAvatar('👨')">👨</button><button type="button" onclick="setAvatar('👩')">👩</button><button type="button" onclick="setAvatar('🙂')">🙂</button></div></div>`);
+  $("#avatarFile").onchange=e=>{const f=e.target.files?.[0];if(!f)return;if(!f.type.startsWith("image/"))return toast("Please choose an image");const r=new FileReader();r.onload=()=>openAvatarCropper(r.result);r.readAsDataURL(f)}
+}
+function openAvatarCropper(dataUrl){
+  openModal("Adjust Profile Photo",`<div class="crop-editor"><p class="crop-editor-copy">Drag the photo to move it and use the slider to zoom. The circle shows exactly what will become your DP.</p><div class="crop-stage" id="cropStage"><canvas id="cropCanvas" width="640" height="640"></canvas></div><div class="crop-control"><label><span>Zoom</span><b id="cropZoomValue">1.0×</b></label><input id="cropZoom" type="range" min="1" max="3" step="0.01" value="1"></div><div class="crop-actions"><button type="button" class="ghost" id="cropCancel">Cancel</button><button type="button" class="primary" id="cropSave">Save Photo</button></div></div>`);
+  const canvas=$("#cropCanvas"),ctx=canvas.getContext("2d"),stage=$("#cropStage"),range=$("#cropZoom"),zoomValue=$("#cropZoomValue");
+  const img=new Image();
+  let scale=1,offsetX=0,offsetY=0,baseScale=1,dragging=false,lastX=0,lastY=0;
+  const clamp=()=>{const drawW=img.naturalWidth*baseScale*scale,drawH=img.naturalHeight*baseScale*scale;const maxX=Math.max(0,(drawW-640)/2),maxY=Math.max(0,(drawH-640)/2);offsetX=Math.max(-maxX,Math.min(maxX,offsetX));offsetY=Math.max(-maxY,Math.min(maxY,offsetY));};
+  const draw=()=>{if(!img.naturalWidth)return;ctx.clearRect(0,0,640,640);ctx.fillStyle="#050811";ctx.fillRect(0,0,640,640);const drawW=img.naturalWidth*baseScale*scale,drawH=img.naturalHeight*baseScale*scale;ctx.drawImage(img,320-drawW/2+offsetX,320-drawH/2+offsetY,drawW,drawH);};
+  img.onload=()=>{baseScale=Math.max(640/img.naturalWidth,640/img.naturalHeight);scale=1;offsetX=0;offsetY=0;draw()};
+  img.src=dataUrl;
+  range.oninput=()=>{scale=Number(range.value);zoomValue.textContent=scale.toFixed(2)+"×";clamp();draw()};
+  const point=e=>{const p=e.touches?.[0]||e;return{x:p.clientX,y:p.clientY}};
+  const down=e=>{e.preventDefault();dragging=true;const p=point(e);lastX=p.x;lastY=p.y};
+  const move=e=>{if(!dragging)return;e.preventDefault();const p=point(e);offsetX+=p.x-lastX;offsetY+=p.y-lastY;lastX=p.x;lastY=p.y;clamp();draw()};
+  const up=()=>dragging=false;
+  stage.addEventListener("pointerdown",down);stage.addEventListener("pointermove",move);stage.addEventListener("pointerup",up);stage.addEventListener("pointercancel",up);stage.addEventListener("pointerleave",up);
+  $("#cropCancel").onclick=()=>openAvatarPicker();
+  $("#cropSave").onclick=()=>{clamp();draw();const out=document.createElement("canvas");out.width=512;out.height=512;const o=out.getContext("2d");o.drawImage(canvas,0,0,512,512);localStorage.setItem("abs_avatar",out.toDataURL("image/jpeg",.92));localStorage.removeItem("abs_avatar_emoji");closeModal();renderProfile();toast("Profile photo updated")};
+}
+
 function setAvatar(v){localStorage.setItem("abs_avatar_emoji",v);localStorage.removeItem("abs_avatar");closeModal();renderProfile();toast("Avatar updated")}
 function toggleTheme(){state.theme=state.theme==="dark"?"light":"dark";localStorage.setItem("abs_theme",state.theme);setup();}
 function openProfileEdit(){
@@ -81,7 +103,7 @@ function openProfileEdit(){
     const f=e.target.files?.[0]; if(!f)return;
     if(!f.type.startsWith("image/"))return toast("Please choose an image");
     const r=new FileReader();
-    r.onload=()=>{localStorage.setItem("abs_avatar",r.result);localStorage.removeItem("abs_avatar_emoji");$("#profilePhotoChoose").innerHTML=`<img src="${esc(r.result)}" alt="Profile">`;toast("Profile photo selected")};
+    r.onload=()=>openAvatarCropper(r.result);
     r.readAsDataURL(f);
   };
   $("#editProfilePage").onsubmit=e=>{
