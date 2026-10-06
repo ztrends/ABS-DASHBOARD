@@ -20,7 +20,7 @@
 <body>
 <section id="login" class="login">
   <div class="login-card">
-    <div class="brand">ABS DASHBOARD</div><h1>Admin Panel</h1><p class="muted">Secure administration · /admin/</p>
+    <div class="brand" style="display:flex;align-items:center;gap:10px"><img src="../assets/abs-logo.png" alt="ABS" style="width:34px;height:34px;object-fit:contain;border-radius:9px"><span>ABS DASHBOARD</span></div><h1>Admin Panel</h1><p class="muted">Secure administration · /admin/</p>
     <form id="loginForm">
       <label>Username</label><input id="adminUser" autocomplete="username" required>
       <label>Password</label><input id="adminPass" type="password" autocomplete="current-password" required>
@@ -31,7 +31,7 @@
 
 <section id="app" class="hidden">
 <header class="top"><div class="wrap toprow">
-  <div><div class="brand">ABS DASHBOARD</div><div class="title">Admin Control Center</div></div>
+  <div><div class="brand" style="display:flex;align-items:center;gap:10px"><img src="../assets/abs-logo.png" alt="ABS" style="width:34px;height:34px;object-fit:contain;border-radius:9px"><span>ABS DASHBOARD</span></div><div class="title">Admin Control Center</div></div>
   <div class="actions"><button class="btn secondary" onclick="refreshAdmin()">↻ Refresh</button><button class="btn danger" onclick="adminLogout()">Logout</button></div>
 </div></header>
 <main class="wrap">
