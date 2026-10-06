@@ -16,16 +16,23 @@ jobs:
         with:
           node-version: 20
 
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - name: Install Capacitor
         run: |
           cd frontend
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Prepare Android project
+      - name: Prepare web files
         run: |
           cd frontend
+          rm -rf www
           mkdir -p www
-          cp -r index.html manifest.json sw.js assets css js admin www/ || true
+          cp -r index.html manifest.json sw.js assets css js admin www/
 
       - name: Initialize Capacitor
         run: |
@@ -34,17 +41,33 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
+      - name: Fix Kotlin dependency conflict
+        run: |
+          cd frontend/android
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("app/build.gradle")
+          s = p.read_text()
+
+          block = """
+          configurations.configureEach {
+              exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"
+              exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"
+          }
+          """
+
+          if "kotlin-stdlib-jdk8" not in s:
+              s = block + "\\n" + s
+
+          p.write_text(s)
+          PY
 
       - name: Build APK
         run: |
           cd frontend/android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew clean assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
