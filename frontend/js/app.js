@@ -18,23 +18,33 @@ const ABS_ADMIN_EMAIL="shkadmin@absdashboard.app";
 const ABS_ADMIN_UID="e38F5FVubhbEmCNAPorz0D5GODG2";
 function firebaseAdminReady(){return typeof firebase!=="undefined"&&firebase.apps&&firebase.apps.length&&firebase.auth&&firebase.firestore}
 async function firebaseAdminLogin(password){
-  if(!firebaseAdminReady()) throw new Error("Firebase is not loaded. Please refresh the app.");
-  const cred=await firebase.auth().signInWithEmailAndPassword(ABS_ADMIN_EMAIL,password);
-  if(cred.user.uid!==ABS_ADMIN_UID){await firebase.auth().signOut();throw new Error("Administrator authorization failed.");}
-  const snap=await firebase.firestore().collection("admins").doc(cred.user.uid).get();
-  if(!snap.exists || snap.data()?.role!=="admin"){await firebase.auth().signOut();throw new Error("Administrator authorization failed.");}
+  if(!firebaseAdminReady()){
+    throw new Error("Firebase is not loaded. Please refresh the app.");
+  }
+
+  const cred = await firebase.auth().signInWithEmailAndPassword(
+    ABS_ADMIN_EMAIL,
+    password
+  );
+
+  if(cred.user.uid !== ABS_ADMIN_UID){
+    await firebase.auth().signOut();
+    throw new Error("Administrator authorization failed.");
+  }
+
   return cred.user;
 }
 async function restoreFirebaseAdminSession(){
   if(!firebaseAdminReady()) return false;
-  const u=firebase.auth().currentUser;
-  if(!u || u.uid!==ABS_ADMIN_UID) return false;
-  try{
-    const snap=await firebase.firestore().collection("admins").doc(u.uid).get();
-    if(!snap.exists || snap.data()?.role!=="admin"){await firebase.auth().signOut();return false;}
-    state.admin=true;
-    openAdminPanel();
-    return true;
+
+  const u = firebase.auth().currentUser;
+
+  if(!u || u.uid !== ABS_ADMIN_UID) return false;
+
+  state.admin = true;
+  openAdminPanel();
+  return true;
+}
   }catch(e){console.error("ABS admin session restore failed",e);return false;}
 }
 function dataKey(){return state.user?.mobile?`abs_data_${state.user.mobile}`:"abs_data"}
