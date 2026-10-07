@@ -85,6 +85,28 @@ window.ABS_FIREBASE_CONFIG = {
 </div>
 <div id="toast" class="toast"></div>
 <div id="modalRoot"></div>
-<script src="js/app.js"></script><script>if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});</script>
+<script src="js/app.js"></script>
+
+<script>
+document.querySelectorAll(".bottom-nav .nav-item").forEach(function(btn){
+  btn.addEventListener("click", function(){
+    const tab = this.dataset.tab;
+
+    document.querySelectorAll(".bottom-nav .nav-item").forEach(function(item){
+      item.classList.remove("active");
+    });
+
+    this.classList.add("active");
+
+    if(typeof window.goTab === "function"){
+      window.goTab(tab);
+    }
+  });
+});
+
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("sw.js").catch(()=>{});
+}
+</script>
 </body>
 </html>
