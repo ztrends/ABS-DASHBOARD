@@ -22,17 +22,31 @@ async function firebaseAdminLogin(password){
     throw new Error("Firebase is not loaded. Please refresh the app.");
   }
 
-  const cred = await firebase.auth().signInWithEmailAndPassword(
-    ABS_ADMIN_EMAIL,
-    password
-  );
+  try {
+    const cred = await firebase.auth().signInWithEmailAndPassword(
+      ABS_ADMIN_EMAIL,
+      password
+    );
 
-  if(cred.user.uid !== ABS_ADMIN_UID){
-    await firebase.auth().signOut();
-    throw new Error("Administrator authorization failed.");
+    if(cred.user.uid !== ABS_ADMIN_UID){
+      await firebase.auth().signOut();
+
+      throw new Error(
+        "Admin UID mismatch. Firebase UID: " + cred.user.uid
+      );
+    }
+
+    return cred.user;
+
+  } catch(err) {
+    console.error("ABS ADMIN LOGIN ERROR:", err);
+
+    throw new Error(
+      err?.code
+        ? "Firebase Error: " + err.code
+        : (err?.message || "Administrator login failed.")
+    );
   }
-
-  return cred.user;
 }
 async function restoreFirebaseAdminSession(){
   if(!firebaseAdminReady()) return false;
