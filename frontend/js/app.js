@@ -417,4 +417,22 @@ Object.assign(HI_UI,{
   "Share your experience, report a problem or suggest a feature":"अपना अनुभव साझा करें, समस्या बताएं या फीचर सुझाएं","Learn every feature":"हर फीचर के बारे में जानें","Personalize the app":"ऐप को अपनी पसंद के अनुसार बनाएं","Add your own income & expense categories":"अपनी आय और खर्च की कैटेगरी जोड़ें","View all income, expense & ledger records":"सभी आय, खर्च और लेजर रिकॉर्ड देखें","Monthly spending limits":"मासिक खर्च की सीमाएं","Jobs & salary history":"नौकरी और सैलरी इतिहास","Add Loan":"लोन जोड़ें","Principal, interest & tenure":"मूलधन, ब्याज और अवधि","Add EMI":"EMI जोड़ें","Record repayment":"भुगतान दर्ज करें","Loan Schedule":"लोन शेड्यूल","Principal & interest timeline":"मूलधन और ब्याज की समयरेखा","Name, phone & balances":"नाम, फोन और बैलेंस","Lena / Dena — receive & pay":"लेना / देना — प्राप्त और भुगतान","AI":"AI","Ask ABS AI anything about your finances...":"अपने फाइनेंस के बारे में ABS AI से कुछ भी पूछें...","Personal Finance Copilot":"पर्सनल फाइनेंस कोपायलट","SUGGESTED NEXT":"अगला सुझाव","NEW TOPIC":"नया विषय","More Services":"और सेवाएं","this month":"इस महीने","Please type a question.":"कृपया कोई सवाल लिखें।","How much have I spent?":"मैंने कितना खर्च किया है?","How much income do I have?":"मेरी आय कितनी है?","What are my total savings?":"मेरी कुल बचत कितनी है?","How much EMI have I paid?":"मैंने कितनी EMI चुकाई है?","How much do I need to receive?":"मुझे कितना पैसा मिलना है?","How much do I need to pay?":"मुझे कितना पैसा देना है?","How do I download my statement?":"मैं अपना स्टेटमेंट कैसे डाउनलोड करूं?","How do I add an expense?":"मैं खर्च कैसे जोड़ूं?","How do I add income?":"मैं आय कैसे जोड़ूं?",
   "Smart Fresh":"स्मार्ट फ्रेश","Enter your account password":"अपना अकाउंट पासवर्ड दर्ज करें","RESET":"रीसेट","Account not found":"अकाउंट नहीं मिला","Profile Picture":"प्रोफ़ाइल फोटो","Update your profile photo":"अपनी प्रोफ़ाइल फोटो अपडेट करें","Upload a photo or choose an avatar below.":"फोटो अपलोड करें या नीचे अवतार चुनें।","Upload Photo":"फोटो अपलोड करें","Choose an avatar":"अवतार चुनें","Profile photo updated":"प्रोफ़ाइल फोटो अपडेट हो गई","Avatar updated":"अवतार अपडेट हो गया","Please choose an image":"कृपया एक इमेज चुनें","Enter your name":"अपना नाम दर्ज करें","Profile updated successfully":"प्रोफ़ाइल सफलतापूर्वक अपडेट हो गई","Current password is incorrect":"वर्तमान पासवर्ड गलत है","Password changed successfully":"पासवर्ड सफलतापूर्वक बदल गया","RELOAD PROFILE":"प्रोफ़ाइल फिर से लोड करें","Personal finance, made simple.":"पर्सनल फाइनेंस, आसान तरीके से।","Personal details":"व्यक्तिगत जानकारी","Back":"वापस","SAVE CHANGES":"बदलाव सेव करें","Refresh data":"डेटा रिफ्रेश करें","Toggle theme":"थीम बदलें","Dashboard refreshed":"डैशबोर्ड रिफ्रेश हो गया","PDF engine is loading — try again":"PDF इंजन लोड हो रहा है — फिर से प्रयास करें"
 });
+function goTab(tab){
+  if(!state.user) return;
 
+  state.tab = tab;
+
+  if(tab === "dashboard"){
+    renderDashboard();
+  }else if(tab === "explore"){
+    renderExplore();
+  }else if(tab === "ai"){
+    renderAI();
+  }else if(tab === "profile"){
+    renderProfile();
+  }
+
+  renderFooter();
+}
+
+window.goTab = goTab;
