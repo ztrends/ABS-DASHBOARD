@@ -59,8 +59,6 @@ async function restoreFirebaseAdminSession(){
   openAdminPanel();
   return true;
 }
-  }catch(e){console.error("ABS admin session restore failed",e);return false;}
-}
 function dataKey(){return state.user?.mobile?`abs_data_${state.user.mobile}`:"abs_data"}
 function ensureData(){state.data=JSON.parse(localStorage.getItem(dataKey())||"null")||EMPTY_DATA();if(!state.data.settings)state.data.settings={};if(!Array.isArray(state.data.settings.categories))state.data.settings.categories=EMPTY_DATA().settings.categories.slice();if(!Array.isArray(state.data.settings.incomeCategories))state.data.settings.incomeCategories=["Salary","Freelance","Business","Bonus","Interest","Gift","Other"];if(!Array.isArray(state.data.settings.customCategories))state.data.settings.customCategories=[];return state.data}
 if(state.user){ensureData();} else {state.data=EMPTY_DATA();}
