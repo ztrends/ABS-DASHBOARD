@@ -4,6 +4,16 @@ function readSession(){try{const raw=localStorage.getItem("abs_user");if(raw)ret
 function persistSession(user){localStorage.setItem("abs_user",JSON.stringify(user));document.cookie="abs_session="+encodeURIComponent(JSON.stringify(user))+"; path=/; max-age=31536000; SameSite=Lax"}
 function clearSession(){localStorage.removeItem("abs_user");document.cookie="abs_session=; path=/; max-age=0; SameSite=Lax"}
 const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("abs_theme")||"dark",data:null,admin:false};
+
+// Initialize Firebase once the Firebase compat scripts and config from index.html are available.
+(function initABSFirebase(){
+  try{
+    if(typeof firebase === "undefined" || !window.ABS_FIREBASE_CONFIG) return;
+    if(!firebase.apps || !firebase.apps.length) firebase.initializeApp(window.ABS_FIREBASE_CONFIG);
+  }catch(err){
+    console.error("ABS Firebase initialization failed",err);
+  }
+})();
 const ABS_ADMIN_EMAIL="shkadmin@absdashboard.app";
 const ABS_ADMIN_UID="e38F5FVubhbEmCNAPorz0D5GODG2";
 function firebaseAdminReady(){return typeof firebase!=="undefined"&&firebase.apps&&firebase.apps.length&&firebase.auth&&firebase.firestore}
