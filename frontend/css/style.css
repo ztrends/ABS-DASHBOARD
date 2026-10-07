@@ -280,3 +280,65 @@ body.ai-open .ai-reset{margin-left:auto}
 @media(min-width:760px){body.ai-open .ai-new-head{height:84px;flex-basis:84px;padding-left:24px;padding-right:24px}
 body.ai-open .ai-chat-composer{bottom:82px}
 }
+/* ABS DASHBOARD — Desktop / PC Layout */
+@media (min-width: 760px){
+
+  body{
+    background:#050811;
+  }
+
+  #app{
+    width:100%;
+    min-height:100vh;
+  }
+
+  .app-shell{
+    width:100%;
+    max-width:1180px;
+    min-height:100vh;
+    margin:0 auto;
+    position:relative;
+    overflow:hidden;
+    box-shadow:0 0 70px rgba(0,0,0,.18);
+  }
+
+  .topbar{
+    width:100%;
+    max-width:1180px;
+    margin:0 auto;
+  }
+
+  .screen{
+    width:100%;
+    max-width:1180px;
+    margin:0 auto;
+    padding-left:28px;
+    padding-right:28px;
+    box-sizing:border-box;
+  }
+
+  .bottom-nav{
+    width:100%;
+    max-width:1180px;
+    margin:0 auto;
+    left:50%;
+    transform:translateX(-50%);
+  }
+
+  .app-footer{
+    max-width:1180px;
+    margin-left:auto;
+    margin-right:auto;
+  }
+
+  /* AI fullscreen remains intentionally full-width */
+  body.ai-open #screen{
+    max-width:none;
+    width:100%;
+    margin:0;
+  }
+
+  body.ai-open .app-shell{
+    max-width:none;
+  }
+}
