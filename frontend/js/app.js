@@ -195,23 +195,60 @@ function openProfileEdit(){
     r.onload=()=>{localStorage.setItem("abs_avatar",r.result);localStorage.removeItem("abs_avatar_emoji");$("#profilePhotoChoose").innerHTML=`<img src="${esc(r.result)}" alt="Profile">`;toast("Profile photo selected")};
     r.readAsDataURL(f);
   };
-  $("#editProfilePage").onsubmit=e=>{
-    e.preventDefault();
-    const n=$("#editName").value.trim();
-    if(!n)return toast("Enter your name");
-    const mobile=state.user.mobile;
-    const users=userRegistry();
-    const u=users.find(x=>x.mobile===mobile);
-    if(!u)return toast("Account not found");
+  $("#editProfilePage").onsubmit=async e=>{
+  e.preventDefault();
+
+  const n=$("#editName").value.trim();
+  if(!n)return toast("Enter your name");
+
+  const mobile=state.user.mobile;
+  const users=userRegistry();
+  const u=users.find(x=>x.mobile===mobile);
+
+  if(!u)return toast("Account not found");
+
+  try{
+
+    // Update Firebase user profile
+    if(firebaseAdminReady() && state.user.uid){
+      await firebase.firestore()
+        .collection("users")
+        .doc(state.user.uid)
+        .set({
+          name:n,
+          lastActive:new Date().toISOString()
+        },{merge:true});
+    }
+
+    // Update local account data
     u.name=n;
-    u.absId=u.absId||state.user.absId||makeAbsId(mobile,u.absSerial||nextAbsSerial(users));
+    u.absId=u.absId||state.user.absId||makeAbsId(
+      mobile,
+      u.absSerial||nextAbsSerial(users)
+    );
+
     localStorage.setItem("abs_users",JSON.stringify(users));
-    state.user={...state.user,name:n,mobile,absId:u.absId||state.user.absId};
-    persistSession(state.user); ensureData();
+
+    state.user={
+      ...state.user,
+      name:n,
+      mobile,
+      absId:u.absId||state.user.absId
+    };
+
+    persistSession(state.user);
+    ensureData();
+
     $("#greeting").textContent=greet(n);
-    renderProfile(); toast("Profile updated successfully");
-  };
-}
+    renderProfile();
+
+    toast("Profile updated successfully");
+
+  }catch(err){
+    console.error("Profile name update failed:",err);
+    toast("Profile update failed. Please try again.");
+  }
+};
 function openAboutApp(){
   const screenEl=document.getElementById("screen");
   if(!screenEl)return;
