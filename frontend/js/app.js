@@ -174,33 +174,136 @@ function adminResetUserPassword(mobile){if(!state.admin)return;openModal("Reset 
 function deleteFeedback(id){if(!state.admin)return;if(!confirm("Delete this feedback?"))return;localStorage.setItem("abs_feedback",JSON.stringify(feedbackList().filter(x=>x.id!==id)));openAdminPanel();toast("Feedback deleted")}
 function setup(){document.body.classList.toggle("light",state.theme==="light");if(state.user){const rec=ensureAbsIds().find(u=>u.mobile===state.user.mobile);if(rec)state.user.absId=rec.absId;const exists=userRegistry().some(u=>u.mobile===state.user.mobile);if(!exists){clearSession();state.user=null;state.data=EMPTY_DATA();}else{ensureData();$("#authScreen").classList.add("hidden");$("#mainApp").classList.remove("hidden");$("#greeting").textContent=greet(state.user.name);render();return}}$("#authScreen").classList.remove("hidden");$("#mainApp").classList.add("hidden")}
 $("#showRegister").onclick=()=>{$("#loginPanel").classList.add("hidden");$("#registerPanel").classList.remove("hidden")};$("#showLogin").onclick=()=>{$("#registerPanel").classList.add("hidden");$("#loginPanel").classList.remove("hidden")};
-$("#registerForm").onsubmit=async e=>{e.preventDefault();const n=$("#regName").value.trim(),m=$("#regMobile").value.trim(),p=$("#regPassword").value,c=$("#regConfirm").value;$("#regMsg").textContent="";if(!/^[6-9]\d{9}$/.test(m))return $("#regMsg").textContent="Enter a valid 10-digit Indian mobile number.";if(p!==c)return $("#regMsg").textContent="Passwords do not match.";if(!firebaseAdminReady())return $("#regMsg").textContent="Firebase is not loaded. Please refresh the app.";const users=userRegistry();if(users.some(u=>u.mobile===m))return $("#regMsg").textContent="An account with this mobile number already exists.";const email=`${m}@absdashboard.app`;try{const cred=await firebase.auth().createUserWithEmailAndPassword(email,p);const serial=nextAbsSerial(users);const absId=makeAbsId(m,serial);await firebase.firestore().collection("users").doc(cred.user.uid).set({name:n,mobile:m,absId,absSerial:serial,createdAt:new Date().toISOString(),premium:false,verified:false,income:0,expense:0,net:0,entries:0,lastActive:new Date().toISOString()},{merge:true});state.user={name:n,mobile:m,absId,uid:cred.user.uid};state.data=EMPTY_DATA();ensureData();save();persistSession(state.user);localStorage.setItem(`abs_password_${m}`,p);users.push({name:n,mobile:m,absSerial:serial,absId,createdAt:new Date().toISOString(),income:0,expense:0,net:0,entries:0,uid:cred.user.uid});localStorage.setItem("abs_users",JSON.stringify(users));setup()}catch(err){console.error("Firebase registration failed",err);$("#regMsg").textContent=err.code==="auth/email-already-in-use"?"An account with this mobile number already exists.":(err.message||"Registration failed. Please try again.")}}
+$("#registerForm").onsubmit=async e=>{
+  e.preventDefault();
+
+  const n=$("#regName").value.trim();
+  const m=$("#regMobile").value.trim();
+  const p=$("#regPassword").value;
+  const c=$("#regConfirm").value;
+
+  $("#regMsg").textContent="";
+
+  if(!/^[6-9]\d{9}$/.test(m)){
+    return $("#regMsg").textContent=
+      "Enter a valid 10-digit Indian mobile number.";
+  }
+
+  if(p!==c){
+    return $("#regMsg").textContent=
+      "Passwords do not match.";
+  }
+
+  if(p.length<6){
+    return $("#regMsg").textContent=
+      "Password must be at least 6 characters.";
+  }
+
+  if(!firebaseAdminReady()){
+    return $("#regMsg").textContent=
+      "Firebase is not loaded. Please refresh the app.";
+  }
+
+  const users=userRegistry();
+
+  const email=`${m}@absdashboard.app`;
+
+  try{
+
+    const cred=
+      await firebase.auth()
+      .createUserWithEmailAndPassword(email,p);
+
+    const serial=nextAbsSerial(users);
+    const absId=makeAbsId(m,serial);
+
+    await firebase.firestore()
+      .collection("users")
+      .doc(cred.user.uid)
+      .set({
+        name:n,
+        mobile:m,
+        absId:absId,
+        absSerial:serial,
+        createdAt:new Date().toISOString(),
+        premium:false,
+        verified:false,
+        income:0,
+        expense:0,
+        net:0,
+        entries:0,
+        lastActive:new Date().toISOString()
+      });
+
+    state.user={
+      name:n,
+      mobile:m,
+      absId:absId,
+      uid:cred.user.uid
+    };
+
+    state.data=EMPTY_DATA();
+
+    ensureData();
+
+    persistSession(state.user);
+
+    users.push({
+      name:n,
+      mobile:m,
+      absSerial:serial,
+      absId:absId,
+      createdAt:new Date().toISOString(),
+      income:0,
+      expense:0,
+      net:0,
+      entries:0,
+      uid:cred.user.uid
+    });
+
+    localStorage.setItem(
+      "abs_users",
+      JSON.stringify(users)
+    );
+
+    setup();
+
+  }catch(err){
+
+    console.error(
+      "Firebase registration failed",
+      err
+    );
+
+    if(err.code==="auth/email-already-in-use"){
+      $("#regMsg").textContent=
+        "An account with this mobile number already exists.";
+    }else if(err.code==="auth/weak-password"){
+      $("#regMsg").textContent=
+        "Password must be at least 6 characters.";
+    }else{
+      $("#regMsg").textContent=
+        err.message||
+        "Registration failed. Please try again.";
+    }
+  }
+};
 $("#loginForm").onsubmit=async e=>{
   e.preventDefault();
 
   const m=$("#loginMobile").value.trim();
   const p=$("#loginPassword").value;
-  $("#authMsg").textContent="";
 
-  /* Hidden administrator route */
-  if(m==="Shkadmin"){
-    try{
-      await firebaseAdminLogin(p);
-      state.user=null;
-      state.admin=true;
-      closeModal();
-      $("#authScreen").classList.add("hidden");
-      $("#mainApp").classList.add("hidden");
-      openAdminPanel();
-    }catch(err){
-      $("#authMsg").textContent=err.message||"Incorrect login details.";
-    }
-    return;
-  }
+  $("#authMsg").textContent="";
 
   if(!/^[6-9]\d{9}$/.test(m)){
     return $("#authMsg").textContent=
       "Enter a valid 10-digit Indian mobile number.";
+  }
+
+  if(!p){
+    return $("#authMsg").textContent=
+      "Enter your password.";
   }
 
   if(!firebaseAdminReady()){
@@ -209,18 +312,24 @@ $("#loginForm").onsubmit=async e=>{
   }
 
   try{
+
     const email=`${m}@absdashboard.app`;
 
-    const cred=await firebase.auth()
+    const cred=
+      await firebase.auth()
       .signInWithEmailAndPassword(email,p);
 
-    const snap=await firebase.firestore()
+    const snap=
+      await firebase.firestore()
       .collection("users")
       .doc(cred.user.uid)
       .get();
 
     if(!snap.exists){
-      return $("#authMsg").textContent="Account record not found.";
+      await firebase.auth().signOut();
+
+      return $("#authMsg").textContent=
+        "Account record not found.";
     }
 
     const u=snap.data();
@@ -231,6 +340,90 @@ $("#loginForm").onsubmit=async e=>{
       absId:u.absId||"",
       uid:cred.user.uid
     };
+
+    const dataSnap=
+      await firebase.firestore()
+      .collection("users")
+      .doc(cred.user.uid)
+      .collection("private")
+      .doc("data")
+      .get();
+
+    if(dataSnap.exists){
+
+      state.data={
+        ...EMPTY_DATA(),
+        ...dataSnap.data()
+      };
+
+    }else{
+
+      state.data=EMPTY_DATA();
+
+      ensureData();
+
+    }
+
+    persistSession(state.user);
+
+    const users=userRegistry();
+
+    const existing=
+      users.find(x=>x.mobile===m);
+
+    if(existing){
+
+      existing.name=state.user.name;
+      existing.uid=cred.user.uid;
+      existing.absId=state.user.absId;
+
+    }else{
+
+      users.push({
+        name:state.user.name,
+        mobile:m,
+        uid:cred.user.uid,
+        absId:state.user.absId,
+        createdAt:
+          u.createdAt||
+          new Date().toISOString()
+      });
+
+    }
+
+    localStorage.setItem(
+      "abs_users",
+      JSON.stringify(users)
+    );
+
+    setup();
+
+  }catch(err){
+
+    console.error(
+      "Firebase login failed",
+      err
+    );
+
+    if(
+      err.code==="auth/user-not-found"||
+      err.code==="auth/invalid-credential"||
+      err.code==="auth/wrong-password"
+    ){
+
+      $("#authMsg").textContent=
+        "Incorrect mobile number or password.";
+
+    }else{
+
+      $("#authMsg").textContent=
+        err.message||
+        "Login failed. Please try again.";
+
+    }
+
+  }
+};
 
     /*
      * Load central financial data from Firestore.
