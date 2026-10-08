@@ -6,11 +6,69 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const escAttr=v=>esc(v).replace(/`/g,'&#96;');
 
 function api(path,opts={}){const headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});if(adminToken)headers.Authorization=`Bearer ${adminToken}`;return fetch(`${API_BASE}${path}`,{...opts,headers}).then(async r=>{let d={};try{d=await r.json()}catch{}if(!r.ok){if(r.status===401){adminToken='';sessionStorage.removeItem('abs_admin_token');showLogin();}throw new Error(d.error||`Request failed (${r.status})`)}return d})}
-function login(){const username=$('adminUser').value.trim(),password=$('adminPass').value;api('/admin/login',{method:'POST',body:JSON.stringify({username,password})}).then(d=>{adminToken=d.token;sessionStorage.setItem('abs_admin_token',adminToken);showAdmin()}).catch(e=>$('loginMsg').textContent=e.message)}
+async function login(){
+  const username=$('adminUser').value.trim();
+  const password=$('adminPass').value;
+
+  try{
+    const d=await api('/admin/login',{
+      method:'POST',
+      body:JSON.stringify({username,password})
+    });
+
+    adminToken=d.token;
+    sessionStorage.setItem('abs_admin_token',adminToken);
+
+    if(!firebase.apps.length){
+      firebase.initializeApp(window.ABS_FIREBASE_CONFIG);
+    }
+
+    const cred=await firebase.auth().signInWithEmailAndPassword(
+      username,
+      password
+    );
+
+    if(cred.user.uid!=="5OjOnepPFOYe49OspKbpBWy3x2e2"){
+      await firebase.auth().signOut();
+      throw new Error("Administrator authorization failed.");
+    }
+
+    showAdmin();
+
+  }catch(e){
+    $('loginMsg').textContent=e.message;
+  }
+}
 function showLogin(){$('login').classList.remove('hidden');$('app').classList.add('hidden')}
 function showAdmin(){$('login').classList.add('hidden');$('app').classList.remove('hidden');refreshAdmin()}
 function adminLogout(){adminToken='';sessionStorage.removeItem('abs_admin_token');showLogin()}
-async function refreshAdmin(){try{const [sum,users,feedback,ads]=await Promise.all([api('/admin/summary'),api('/admin/users'),api('/admin/feedback'),api('/ads').catch(()=>({items:[]}))]);state.summary=sum;state.users=users.items||[];state.feedback=feedback.items||[];state.ads=ads.items||[];renderStats();renderUsers();renderAds();renderFeedback()}catch(e){if($('loginMsg'))$('loginMsg').textContent=e.message}}
+async function refreshAdmin(){
+  try{
+    const snap=await firebase.firestore().collection('users').get();
+
+    state.users=snap.docs.map(doc=>({
+      uid:doc.id,
+      ...doc.data()
+    }));
+
+    state.summary={
+      users:state.users.length,
+      verified:state.users.filter(u=>u.verified===true).length,
+      premium:state.users.filter(u=>u.premium===true).length
+    };
+
+    const ads=await api('/ads').catch(()=>({items:[]}));
+    state.ads=ads.items||[];
+
+    renderStats();
+    renderUsers();
+    renderAds();
+
+  }catch(e){
+    console.error(e);
+    $('loginMsg').textContent=e.message;
+  }
+}
 function renderStats(){const s=state.summary;$('userCount').textContent=s.users??state.users.length;$('feedbackCount').textContent=s.feedback??state.feedback.length;$('adCount').textContent=s.ads??state.ads.filter(a=>a.active).length;$('verifiedCount').textContent=s.verified??state.users.filter(u=>u.verified).length;if($('requestCount'))$('requestCount').textContent=s.premium??state.users.filter(u=>u.premium).length}
 function renderUsers(){const list=state.users;$('users').innerHTML=list.length?list.map(u=>`<div class="user"><div class="userhead"><div><div class="name">${esc(u.name)}${u.verified?'<span class="verify">✓</span>':''}</div><div class="mobile">${esc(u.mobile)}</div><div class="sub"><b>ABS ID:</b> ${esc(u.abs_id||'—')} · ${u.premium?'PREMIUM':'STANDARD'}</div></div><span class="badge">${u.verified?'VERIFIED':'REGISTERED'}</span></div><div class="sub">Created: ${esc(formatDate(u.created_at))}</div><div class="row"><button class="btn" onclick="openUserManager(${u.id})">VIEW / MANAGE</button><button class="btn ${u.verified?'secondary':'blue'}" onclick="toggleVerified(${u.id},${!u.verified})">${u.verified?'REMOVE BLUE TICK':'✓ VERIFY ACCOUNT'}</button><button class="btn danger" onclick="deleteUser(${u.id})">DELETE ACCOUNT</button></div></div>`).join(''):'<div class="empty">No registered users found.</div>'}
 function openUserManager(id){const u=state.users.find(x=>x.id===id);if(!u)return;$('modalTitle').textContent='User Account';$('modalBody').innerHTML=`<p class="muted"><b>${esc(u.name)}</b><br>${esc(u.mobile)}</p><label>ABS ID</label><input id="editAbsId" value="${escAttr(u.abs_id||'')}" placeholder="ABS701001"><label>Display Name</label><input id="editName" value="${escAttr(u.name||'')}"><div id="userMsg" class="msg"></div><button class="btn full" onclick="saveUser(${u.id})">SAVE USER</button><div class="row"><button class="btn ${u.verified?'secondary':'blue'}" onclick="toggleVerified(${u.id},${!u.verified})">${u.verified?'REMOVE BLUE TICK':'✓ VERIFY ACCOUNT'}</button><button class="btn ok" onclick="togglePremium(${u.id},${!u.premium})">${u.premium?'REMOVE PREMIUM':'MAKE PREMIUM'}</button></div><hr style="border:0;border-top:1px solid var(--line);margin:18px 0"><div class="sub">Password is never displayed. Admin can set a new password.</div><button class="btn full" style="margin-top:10px" onclick="changePassword(${u.id})">RESET PASSWORD</button><button class="btn danger full" style="margin-top:10px" onclick="deleteUser(${u.id})">DELETE ACCOUNT</button>`;$('modal').classList.remove('hidden')}
