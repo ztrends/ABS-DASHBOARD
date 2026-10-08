@@ -21,6 +21,23 @@ admin.initializeApp({
 
 const firebaseAuth = admin.auth();
 const firestore = admin.firestore();
+async function nextFirebaseAbsId(mobile){
+  const snap = await firestore.collection('users').get();
+
+  let maxSerial = 1000;
+
+  snap.forEach(doc => {
+    const d = doc.data();
+    if(Number.isFinite(Number(d.absSerial))){
+      maxSerial = Math.max(maxSerial, Number(d.absSerial));
+    }
+  });
+
+  const serial = maxSerial + 1;
+  const absId = `ABS${mobile.slice(-2)}${serial}`;
+
+  return { absId, absSerial: serial };
+}
 const ROOT=path.join(__dirname,'..');
 const DB_DIR=path.join(ROOT,'data'); fs.mkdirSync(DB_DIR,{recursive:true});
 const db=new Database(path.join(DB_DIR,'abs-dashboard.sqlite'));
@@ -65,6 +82,101 @@ app.get('/api/admin/summary',admin,(req,res)=>{const users=db.prepare('SELECT CO
 app.patch('/api/admin/users/:id',admin,(req,res)=>{const {verified,premium,abs_id,name}=req.body||{};db.prepare('UPDATE users SET verified=COALESCE(?,verified),premium=COALESCE(?,premium),abs_id=COALESCE(?,abs_id),name=COALESCE(?,name),updated_at=? WHERE id=?').run(verified==null?null:(verified?1:0),premium==null?null:(premium?1:0),abs_id||null,name||null,now(),req.params.id);res.json({ok:true})});
 app.delete('/api/admin/users/:id',admin,(req,res)=>{db.prepare('DELETE FROM users WHERE id=?').run(req.params.id);res.json({ok:true})});
 app.post('/api/admin/users/:id/reset-password',admin,(req,res)=>{const p=String(req.body?.password||'');if(p.length<6)return res.status(400).json({error:'Password must be at least 6 characters'});db.prepare('UPDATE users SET password_hash=?,updated_at=? WHERE id=?').run(bcrypt.hashSync(p,12),now(),req.params.id);res.json({ok:true})});
+app.post('/api/admin/firebase-users', admin, async (req,res)=>{
+  try{
+    const {
+      name,
+      mobile,
+      password
+    } = req.body;
+
+    if(!name || !mobile || !password){
+      return res.status(400).json({
+        error:'Name, mobile and password are required.'
+      });
+    }
+
+    if(!/^[6-9]\d{9}$/.test(mobile)){
+      return res.status(400).json({
+        error:'Enter a valid 10-digit Indian mobile number.'
+      });
+    }
+
+    if(password.length < 6){
+      return res.status(400).json({
+        error:'Password must be at least 6 characters.'
+      });
+    }
+
+    const email = `${mobile}@absdashboard.app`;
+
+    // Check whether Firebase account already exists
+    try{
+      const existing = await firebaseAuth.getUserByEmail(email);
+
+      if(existing){
+        return res.status(409).json({
+          error:'An account already exists for this mobile number.'
+        });
+      }
+    }catch(err){
+      if(err.code !== 'auth/user-not-found'){
+        throw err;
+      }
+    }
+
+    // Generate ABS ID
+    const { absId, absSerial } =
+      await nextFirebaseAbsId(mobile);
+
+    // Create Firebase Authentication user
+    const userRecord =
+      await firebaseAuth.createUser({
+        email,
+        password,
+        displayName:name
+      });
+
+    // Create Firestore profile
+    await firestore
+      .collection('users')
+      .doc(userRecord.uid)
+      .set({
+        name,
+        mobile,
+        absId,
+        absSerial,
+        createdAt:now(),
+        premium:false,
+        verified:false,
+        income:0,
+        expense:0,
+        net:0,
+        entries:0,
+        lastActive:now()
+      });
+
+    res.json({
+      ok:true,
+      message:'User created successfully.',
+      user:{
+        uid:userRecord.uid,
+        name,
+        mobile,
+        email,
+        absId,
+        absSerial
+      }
+    });
+
+  }catch(err){
+    console.error('Firebase user creation failed:',err);
+
+    res.status(500).json({
+      error:err.message || 'Unable to create user.'
+    });
+  }
+});
 app.get('/api/admin/feedback',admin,(req,res)=>res.json({items:db.prepare('SELECT * FROM feedback ORDER BY id DESC').all()}));
 app.post('/api/admin/ads',admin,(req,res)=>{const x=req.body||{};const info=db.prepare('INSERT INTO ads(title,text,badge,image,link,active,created_at) VALUES(?,?,?,?,?,?,?)').run(x.title||'',x.text||'',x.badge||'FEATURED',x.image||'',x.link||'',x.active===false?0:1,now());res.status(201).json({item:db.prepare('SELECT * FROM ads WHERE id=?').get(info.lastInsertRowid)})});
 app.patch('/api/admin/ads/:id',admin,(req,res)=>{const x=req.body||{};db.prepare('UPDATE ads SET title=COALESCE(?,title),text=COALESCE(?,text),badge=COALESCE(?,badge),image=COALESCE(?,image),link=COALESCE(?,link),active=COALESCE(?,active) WHERE id=?').run(x.title??null,x.text??null,x.badge??null,x.image??null,x.link??null,x.active==null?null:(x.active?1:0),req.params.id);res.json({ok:true})});
