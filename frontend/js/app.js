@@ -420,83 +420,9 @@ $("#loginForm").onsubmit=async e=>{
         err.message||
         "Login failed. Please try again.";
 
-    }
-
   }
 };
 
-    /*
-     * Load central financial data from Firestore.
-     * LocalStorage remains only as a temporary fallback.
-     */
-    try{
-      const dataSnap=await firebase.firestore()
-        .collection("users")
-        .doc(cred.user.uid)
-        .collection("private")
-        .doc("data")
-        .get();
-
-      if(dataSnap.exists){
-        state.data={
-          ...EMPTY_DATA(),
-          ...dataSnap.data()
-        };
-      }else{
-        ensureData();
-      }
-    }catch(dataErr){
-      console.warn("Central data load failed:",dataErr);
-      ensureData();
-    }
-
-    persistSession(state.user);
-
-    localStorage.setItem(
-      `abs_password_${m}`,
-      p
-    );
-
-    const users=userRegistry();
-    const existing=users.find(x=>x.mobile===m);
-
-    if(existing){
-      existing.name=state.user.name;
-      existing.uid=cred.user.uid;
-      existing.absId=state.user.absId;
-    }else{
-      users.push({
-        name:state.user.name,
-        mobile:m,
-        uid:cred.user.uid,
-        absId:state.user.absId,
-        createdAt:u.createdAt||new Date().toISOString()
-      });
-    }
-
-    localStorage.setItem(
-      "abs_users",
-      JSON.stringify(users)
-    );
-
-    setup();
-loadAds().then(()=>{
-  if(state.user){
-    render();
-  }
-});
-
-  }catch(err){
-    console.error("Firebase login failed:",err);
-
-    $("#authMsg").textContent=
-      err.code==="auth/user-not-found" ||
-      err.code==="auth/invalid-credential" ||
-      err.code==="auth/wrong-password"
-        ? "Incorrect mobile number or password."
-        : (err.message||"Login failed.");
-  }
-};
 $("#themeBtn").onclick=()=>{state.theme=state.theme==="dark"?"light":"dark";localStorage.setItem("abs_theme",state.theme);setup()};
 $("#refreshBtn").onclick=refreshAppData;
 function goTab(tab){try{state.tab=tab||"dashboard";document.querySelectorAll(".nav-item").forEach(x=>x.classList.toggle("active",x.dataset.tab===state.tab));render();}catch(err){console.error("ABS navigation error",err);if(state.tab==="profile")renderProfile();else toast("Unable to open this section. Please try again.")}}
