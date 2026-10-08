@@ -59,5 +59,7 @@ const frontend=path.join(__dirname,'../../frontend');
 app.get('/admin', (req,res)=>res.sendFile(path.join(frontend,'admin','index.html')));
 app.get('/admin/', (req,res)=>res.sendFile(path.join(frontend,'admin','index.html')));
 app.use(express.static(frontend));
-app.get('*',(req,res)=>res.sendFile(path.join(frontend,'index.html')));
+app.use((req,res)=>{
+  res.sendFile(path.join(frontend,'index.html'));
+});
 const port=process.env.PORT||3000;app.listen(port,()=>console.log(`ABS DASHBOARD running at http://localhost:${port}`));
