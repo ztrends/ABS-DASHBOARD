@@ -14,8 +14,8 @@ const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("ab
     console.error("ABS Firebase initialization failed",err);
   }
 })();
-const ABS_ADMIN_EMAIL="shkadmin@absdashboard.app";
-const ABS_ADMIN_UID="e38F5FVubhbEmCNAPorz0D5GODG2";
+const ABS_ADMIN_EMAIL="riyazalipvt@gmail.com";
+const ABS_ADMIN_UID="5OjOnepPFOYe49OspKbpBWy3x2e2";
 function firebaseAdminReady(){return typeof firebase!=="undefined"&&firebase.apps&&firebase.apps.length&&firebase.auth&&firebase.firestore}
 async function firebaseAdminLogin(password){
   if(!firebaseAdminReady()){
