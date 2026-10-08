@@ -29,6 +29,5 @@ function deleteAd(id){if(!confirm('Delete this advertisement?'))return;api(`/adm
 function renderFeedback(){$('feedback').innerHTML=state.feedback.length?state.feedback.map(f=>`<div class="feedback"><b>${esc(f.type||'Feedback')}</b><div class="sub">${esc(f.message||'')}</div><div class="sub">${esc(f.name||'User')} · ${esc(f.mobile||'')} · ${esc(formatDate(f.created_at))}</div></div>`).join(''):'<div class="empty">No feedback yet.</div>'}
 function formatDate(v){if(!v)return'—';const d=new Date(v);return isNaN(d)?'—':d.toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'})}
 function closeModal(){$('modal').classList.add('hidden');window._adImage=''}
-$('loginForm').addEventListener('submit',e=>{e.preventDefault();login()});
 if(adminToken)showAdmin();else showLogin();
 window.refreshAdmin=refreshAdmin;window.adminLogout=adminLogout;window.openCreateUser=openCreateUser;window.openUserManager=openUserManager;window.toggleVerified=toggleVerified;window.togglePremium=togglePremium;window.changePassword=changePassword;window.deleteUser=deleteUser;window.saveUser=saveUser;window.savePassword=savePassword;window.createUser=createUser;window.openAdModal=openAdModal;window.saveAd=saveAd;window.toggleAd=toggleAd;window.deleteAd=deleteAd;window.closeModal=closeModal;
