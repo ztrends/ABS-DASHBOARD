@@ -77,6 +77,24 @@
   <div class="modalhead"><h2 id="modalTitle">Manage</h2><button class="close" onclick="closeModal()">×</button></div>
   <div id="modalBody"></div>
 </div></div>
-<script src="admin.js?v=2"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore-compat.js"></script>
+
+<script>
+window.ABS_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBwJRBG9GmLMqStv1-3GLTYEEtJ-AhuyTQ",
+  authDomain: "abs-dashboard-dd0b2.firebaseapp.com",
+  projectId: "abs-dashboard-dd0b2",
+  storageBucket: "abs-dashboard-dd0b2.firebasestorage.app",
+  messagingSenderId: "432438653628",
+  appId: "1:432438653628:web:bca671dea4a6daf3cf56b9",
+  measurementId: "G-H34XQDT4T0"
+};
+
+firebase.initializeApp(window.ABS_FIREBASE_CONFIG);
+</script>
+
+<script src="admin.js?v=3"></script>
 </body>
 </html>
