@@ -4,6 +4,7 @@ let adminToken=sessionStorage.getItem('abs_admin_token')||'';
 let state={users:[],feedback:[],ads:[],summary:{}};
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const escAttr=v=>esc(v).replace(/`/g,'&#96;');
+
 function api(path,opts={}){const headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});if(adminToken)headers.Authorization=`Bearer ${adminToken}`;return fetch(`${API_BASE}${path}`,{...opts,headers}).then(async r=>{let d={};try{d=await r.json()}catch{}if(!r.ok){if(r.status===401){adminToken='';sessionStorage.removeItem('abs_admin_token');showLogin();}throw new Error(d.error||`Request failed (${r.status})`)}return d})}
 function login(){const username=$('adminUser').value.trim(),password=$('adminPass').value;api('/admin/login',{method:'POST',body:JSON.stringify({username,password})}).then(d=>{adminToken=d.token;sessionStorage.setItem('abs_admin_token',adminToken);showAdmin()}).catch(e=>$('loginMsg').textContent=e.message)}
 function showLogin(){$('login').classList.remove('hidden');$('app').classList.add('hidden')}
