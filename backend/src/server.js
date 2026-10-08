@@ -6,7 +6,21 @@ const bcrypt=require('bcryptjs');
 const jwt=require('jsonwebtoken');
 const Database=require('better-sqlite3');
 const rateLimit=require('express-rate-limit');
+const admin=require('firebase-admin');
 
+const FIREBASE_SERVICE_ACCOUNT_PATH =
+  '/etc/secrets/firebase-service-account.json';
+
+const serviceAccount = JSON.parse(
+  fs.readFileSync(FIREBASE_SERVICE_ACCOUNT_PATH, 'utf8')
+);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+const firebaseAuth = admin.auth();
+const firestore = admin.firestore();
 const ROOT=path.join(__dirname,'..');
 const DB_DIR=path.join(ROOT,'data'); fs.mkdirSync(DB_DIR,{recursive:true});
 const db=new Database(path.join(DB_DIR,'abs-dashboard.sqlite'));
