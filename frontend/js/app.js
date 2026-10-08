@@ -64,7 +64,50 @@ function ensureData(){state.data=JSON.parse(localStorage.getItem(dataKey())||"nu
 if(state.user){ensureData();} else {state.data=EMPTY_DATA();}
 state.data.settings=state.data.settings||EMPTY_DATA().settings; state.data.settings.categories=state.data.settings.categories||EMPTY_DATA().settings.categories; state.data.people=state.data.people||[]; state.data.ledger=state.data.ledger||[];
 const money=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:0});
-const save=()=>{if(!state.user?.mobile)return;localStorage.setItem(dataKey(),JSON.stringify(state.data));syncUserRegistry();};
+const save=async()=>{
+  if(!state.user?.uid)return;
+
+  // Local cache
+  localStorage.setItem(
+    dataKey(),
+    JSON.stringify(state.data)
+  );
+
+  syncUserRegistry();
+
+  try{
+    const t=totals();
+
+    await firebase.firestore()
+      .collection("users")
+      .doc(state.user.uid)
+      .collection("private")
+      .doc("data")
+      .set(state.data,{merge:true});
+
+    await firebase.firestore()
+      .collection("users")
+      .doc(state.user.uid)
+      .set({
+        name:state.user.name,
+        mobile:state.user.mobile,
+        absId:state.user.absId||"",
+        income:t.income,
+        expense:t.expense,
+        net:t.net,
+        entries:
+          state.data.income.length+
+          state.data.expenses.length+
+          state.data.loans.length+
+          state.data.emi.length+
+          state.data.ledger.length,
+        lastActive:new Date().toISOString()
+      },{merge:true});
+
+  }catch(err){
+    console.error("Central data save failed:",err);
+  }
+};
 function userRegistry(){return JSON.parse(localStorage.getItem("abs_users")||"[]")}
 function nextAbsSerial(users){const nums=users.map(u=>String(u.absId||"").match(/(\d{4,})$/)).filter(Boolean).map(m=>Number(m[1])).filter(n=>Number.isFinite(n));return Math.max(1000,...nums)+1}
 function makeAbsId(mobile,serial){return `ABS${String(mobile||"").slice(-2)}${serial}`}
@@ -134,10 +177,12 @@ $("#showRegister").onclick=()=>{$("#loginPanel").classList.add("hidden");$("#reg
 $("#registerForm").onsubmit=async e=>{e.preventDefault();const n=$("#regName").value.trim(),m=$("#regMobile").value.trim(),p=$("#regPassword").value,c=$("#regConfirm").value;$("#regMsg").textContent="";if(!/^[6-9]\d{9}$/.test(m))return $("#regMsg").textContent="Enter a valid 10-digit Indian mobile number.";if(p!==c)return $("#regMsg").textContent="Passwords do not match.";if(!firebaseAdminReady())return $("#regMsg").textContent="Firebase is not loaded. Please refresh the app.";const users=userRegistry();if(users.some(u=>u.mobile===m))return $("#regMsg").textContent="An account with this mobile number already exists.";const email=`${m}@absdashboard.app`;try{const cred=await firebase.auth().createUserWithEmailAndPassword(email,p);const serial=nextAbsSerial(users);const absId=makeAbsId(m,serial);await firebase.firestore().collection("users").doc(cred.user.uid).set({name:n,mobile:m,absId,absSerial:serial,createdAt:new Date().toISOString(),premium:false,verified:false,income:0,expense:0,net:0,entries:0,lastActive:new Date().toISOString()},{merge:true});state.user={name:n,mobile:m,absId,uid:cred.user.uid};state.data=EMPTY_DATA();ensureData();save();persistSession(state.user);localStorage.setItem(`abs_password_${m}`,p);users.push({name:n,mobile:m,absSerial:serial,absId,createdAt:new Date().toISOString(),income:0,expense:0,net:0,entries:0,uid:cred.user.uid});localStorage.setItem("abs_users",JSON.stringify(users));setup()}catch(err){console.error("Firebase registration failed",err);$("#regMsg").textContent=err.code==="auth/email-already-in-use"?"An account with this mobile number already exists.":(err.message||"Registration failed. Please try again.")}}
 $("#loginForm").onsubmit=async e=>{
   e.preventDefault();
-  const m=$("#loginMobile").value.trim(),p=$("#loginPassword").value;
+
+  const m=$("#loginMobile").value.trim();
+  const p=$("#loginPassword").value;
   $("#authMsg").textContent="";
 
-  /* Hidden administrator route: no admin button/text is shown on login. */
+  /* Hidden administrator route */
   if(m==="Shkadmin"){
     try{
       await firebaseAdminLogin(p);
@@ -153,11 +198,111 @@ $("#loginForm").onsubmit=async e=>{
     return;
   }
 
-  if(!/^[6-9]\d{9}$/.test(m))return $("#authMsg").textContent="Enter a valid 10-digit Indian mobile number.";
-  const users=userRegistry(),u=users.find(x=>x.mobile===m);const stored=localStorage.getItem(`abs_password_${m}`);
-  if(!u||stored===null)return $("#authMsg").textContent="Account not found on this device.";
-  if(p!==stored)return $("#authMsg").textContent="Incorrect mobile number or password.";
-  state.user={name:u.name,mobile:u.mobile};persistSession(state.user);ensureData();setup();
+  if(!/^[6-9]\d{9}$/.test(m)){
+    return $("#authMsg").textContent=
+      "Enter a valid 10-digit Indian mobile number.";
+  }
+
+  if(!firebaseAdminReady()){
+    return $("#authMsg").textContent=
+      "Firebase is not loaded. Please refresh the app.";
+  }
+
+  try{
+    const email=`${m}@absdashboard.app`;
+
+    const cred=await firebase.auth()
+      .signInWithEmailAndPassword(email,p);
+
+    const snap=await firebase.firestore()
+      .collection("users")
+      .doc(cred.user.uid)
+      .get();
+
+    if(!snap.exists){
+      return $("#authMsg").textContent="Account record not found.";
+    }
+
+    const u=snap.data();
+
+    state.user={
+      name:u.name||"User",
+      mobile:u.mobile||m,
+      absId:u.absId||"",
+      uid:cred.user.uid
+    };
+
+    /*
+     * Load central financial data from Firestore.
+     * LocalStorage remains only as a temporary fallback.
+     */
+    try{
+      const dataSnap=await firebase.firestore()
+        .collection("users")
+        .doc(cred.user.uid)
+        .collection("private")
+        .doc("data")
+        .get();
+
+      if(dataSnap.exists){
+        state.data={
+          ...EMPTY_DATA(),
+          ...dataSnap.data()
+        };
+      }else{
+        ensureData();
+      }
+    }catch(dataErr){
+      console.warn("Central data load failed:",dataErr);
+      ensureData();
+    }
+
+    persistSession(state.user);
+
+    localStorage.setItem(
+      `abs_password_${m}`,
+      p
+    );
+
+    const users=userRegistry();
+    const existing=users.find(x=>x.mobile===m);
+
+    if(existing){
+      existing.name=state.user.name;
+      existing.uid=cred.user.uid;
+      existing.absId=state.user.absId;
+    }else{
+      users.push({
+        name:state.user.name,
+        mobile:m,
+        uid:cred.user.uid,
+        absId:state.user.absId,
+        createdAt:u.createdAt||new Date().toISOString()
+      });
+    }
+
+    localStorage.setItem(
+      "abs_users",
+      JSON.stringify(users)
+    );
+
+    setup();
+loadAds().then(()=>{
+  if(state.user){
+    render();
+  }
+});
+
+  }catch(err){
+    console.error("Firebase login failed:",err);
+
+    $("#authMsg").textContent=
+      err.code==="auth/user-not-found" ||
+      err.code==="auth/invalid-credential" ||
+      err.code==="auth/wrong-password"
+        ? "Incorrect mobile number or password."
+        : (err.message||"Login failed.");
+  }
 };
 $("#themeBtn").onclick=()=>{state.theme=state.theme==="dark"?"light":"dark";localStorage.setItem("abs_theme",state.theme);setup()};
 $("#refreshBtn").onclick=refreshAppData;
