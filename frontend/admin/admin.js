@@ -339,14 +339,83 @@ async function openCreateUser(){
   $('modalTitle').textContent = 'Create User Account';
 
   $('modalBody').innerHTML = `
-    <p class="muted">
-      Create User is temporarily disabled here because the main app
-      uses Firebase Authentication. Creating a SQLite-only user would
-      make the account invisible to the main app.
-    </p>
+    <label>Name</label>
+    <input id="createUserName"
+      type="text"
+      placeholder="Enter user name">
+
+    <label>Mobile Number</label>
+    <input id="createUserMobile"
+      type="tel"
+      inputmode="numeric"
+      maxlength="10"
+      placeholder="10-digit mobile number">
+
+    <label>Password</label>
+    <input id="createUserPassword"
+      type="password"
+      placeholder="Minimum 6 characters">
+
+    <div id="createUserMsg" class="msg"></div>
+
+    <button
+      class="btn full"
+      style="margin-top:16px"
+      onclick="submitCreateUser()">
+      CREATE USER
+    </button>
   `;
 
   $('modal').classList.remove('hidden');
+}
+
+async function submitCreateUser(){
+  const name = $('createUserName').value.trim();
+  const mobile = $('createUserMobile').value.trim();
+  const password = $('createUserPassword').value;
+
+  const msg = $('createUserMsg');
+  msg.textContent = '';
+
+  if(!name){
+    return msg.textContent = 'Enter user name.';
+  }
+
+  if(!/^[6-9]\d{9}$/.test(mobile)){
+    return msg.textContent =
+      'Enter a valid 10-digit Indian mobile number.';
+  }
+
+  if(password.length < 6){
+    return msg.textContent =
+      'Password must be at least 6 characters.';
+  }
+
+  try{
+    const result = await api('/admin/firebase-users',{
+      method:'POST',
+      body:JSON.stringify({
+        name,
+        mobile,
+        password
+      })
+    });
+
+    alert(
+      `User created successfully!\n\n` +
+      `Name: ${result.user.name}\n` +
+      `Mobile: ${result.user.mobile}\n` +
+      `ABS ID: ${result.user.absId}`
+    );
+
+    closeModal();
+    await refreshAdmin();
+
+  }catch(e){
+    console.error('Create user failed:',e);
+    msg.textContent =
+      e.message || 'Unable to create user.';
+  }
 }
 
 function createUser(){
