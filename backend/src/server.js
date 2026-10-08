@@ -20,8 +20,8 @@ CREATE TABLE IF NOT EXISTS ads(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,t
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
 `);
 const JWT_SECRET=process.env.JWT_SECRET||'CHANGE_THIS_ABS_SECRET_IN_PRODUCTION';
-const ADMIN_USER=process.env.ADMIN_USER||'Shkadmin';
-const ADMIN_PASS=process.env.ADMIN_PASS||'Shk2005';
+const ADMIN_USER=process.env.ADMIN_USER||'riyazalipvt@gmail.com';
+const ADMIN_PASS=process.env.ADMIN_PASS||'Shkriyaz@abs70';
 function now(){return new Date().toISOString()}
 function nextAbsId(mobile){const last=mobile.slice(-2); const row=db.prepare("SELECT COUNT(*) c FROM users WHERE mobile LIKE ?").get('%'); return `ABS${last}${1001+row.c}`}
 function sign(u){return jwt.sign({sub:u.id,mobile:u.mobile,role:'user'},JWT_SECRET,{expiresIn:'7d'})}
