@@ -1,4 +1,4 @@
-const API_BASE = window.ABS_API_BASE || `${location.origin}/api`;
+const API_BASE = 'https://abs-dashboard-t7up.onrender.com/api';
 const $=id=>document.getElementById(id);
 let adminToken=sessionStorage.getItem('abs_admin_token')||'';
 let state={users:[],feedback:[],ads:[],summary:{}};
