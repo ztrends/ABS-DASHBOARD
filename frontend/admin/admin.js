@@ -1,5 +1,4 @@
 const API_BASE = 'https://abs-dashboard-t7up.onrender.com/api';
-const ADMIN_UID = '5OjOnepPFOYe49OspKbpBWy3x2e2';
 
 const $ = id => document.getElementById(id);
 let adminToken = sessionStorage.getItem('abs_admin_token') || '';
@@ -10,13 +9,6 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
 }[c]));
 const escAttr = v => esc(v).replace(/`/g, '&#96;');
-
-function ensureFirebase(){
-  if(!window.firebase) throw new Error('Firebase SDK is not loaded.');
-  if(!firebase.apps.length){
-    firebase.initializeApp(window.ABS_FIREBASE_CONFIG);
-  }
-}
 
 function api(path, opts = {}){
   const headers = Object.assign(
@@ -51,18 +43,9 @@ async function login(){
       body:JSON.stringify({username,password})
     });
 
-    ensureFirebase();
-
-    const cred = await firebase.auth().signInWithEmailAndPassword(
-      username,
-      password
-    );
-
-    if(cred.user.uid !== ADMIN_UID){
-      await firebase.auth().signOut();
-      throw new Error('Administrator authorization failed.');
-    }
-
+    // Render backend validates ADMIN_USER and ADMIN_PASS and issues a short-lived JWT.
+    // Firebase client sign-in is intentionally not repeated here; Firebase admin tasks
+    // are performed securely by the backend using its service-account Secret File.
     adminToken = d.token;
     sessionStorage.setItem('abs_admin_token', adminToken);
     showAdmin();
@@ -85,13 +68,10 @@ function showAdmin(){
 }
 
 async function adminLogout(){
-  try{
-    ensureFirebase();
-    if(firebase.auth().currentUser) await firebase.auth().signOut();
-  }catch{}
   adminToken = '';
   sessionStorage.removeItem('abs_admin_token');
   showLogin();
+  setAdminRefreshStatus('Signed out.');
 }
 
 function setAdminRefreshStatus(message, isError = false){
@@ -109,24 +89,6 @@ function setAdminRefreshStatus(message, isError = false){
   }
 }
 
-async function waitForAdminAuth(){
-  ensureFirebase();
-  const auth = firebase.auth();
-  if(auth.currentUser) return auth.currentUser;
-  return await new Promise(resolve => {
-    let unsubscribe = null;
-    const timer = setTimeout(() => {
-      try{ unsubscribe && unsubscribe(); }catch{}
-      resolve(auth.currentUser || null);
-    }, 8000);
-    unsubscribe = auth.onAuthStateChanged(user => {
-      clearTimeout(timer);
-      try{ unsubscribe && unsubscribe(); }catch{}
-      resolve(user || null);
-    });
-  });
-}
-
 async function refreshAdmin(){
   if(refreshInProgress) return;
   refreshInProgress = true;
@@ -138,12 +100,11 @@ async function refreshAdmin(){
   setAdminRefreshStatus('Refreshing users, banners and feedback…');
 
   try{
-    const current = await waitForAdminAuth();
-    if(!current || current.uid !== ADMIN_UID){
-      throw new Error('Administrator authorization failed. Please log in again.');
+    if(!adminToken){
+      throw new Error('Admin session expired. Please log in again.');
     }
 
-    // Read current Firestore data through the trusted API to avoid stale browser cache/rules failures.
+    // Read Firebase data through the trusted API using the Render admin JWT.
     const usersResponse = await api('/admin/firebase-users');
     state.users = Array.isArray(usersResponse.items) ? usersResponse.items : [];
 
@@ -569,14 +530,8 @@ function closeModal(){
 }
 
 if(adminToken){
-  ensureFirebase();
-  firebase.auth().onAuthStateChanged(user => {
-    if(user && user.uid === ADMIN_UID){
-      showAdmin();
-    }else{
-      showLogin();
-    }
-  });
+  // Restore the Render JWT session; refreshAdmin will validate it with the API.
+  showAdmin();
 }else{
   showLogin();
 }
