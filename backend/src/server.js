@@ -27,15 +27,21 @@ const FIREBASE_ADMIN_UID=process.env.FIREBASE_ADMIN_UID||'5OjOnepPFOYe49OspKbpBW
 function now(){return new Date().toISOString()}
 function getFirebaseAdmin(){
   if(firebaseAdmin.apps.length) return firebaseAdmin;
-  const raw=process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  // Prefer an Environment Variable if supplied; otherwise use Render Secret File.
+  // Render mounts Secret Files under /etc/secrets/<filename>.
+  let raw=process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  const secretFile=process.env.FIREBASE_SERVICE_ACCOUNT_FILE||'/etc/secrets/firebase-service-account.json';
+  if(!raw && fs.existsSync(secretFile)){
+    raw=fs.readFileSync(secretFile,'utf8');
+  }
   if(!raw){
-    const err=new Error('Firebase Admin is not configured on Render. Add FIREBASE_SERVICE_ACCOUNT_JSON in the backend environment variables.');
+    const err=new Error('Firebase Admin is not configured. Add a FIREBASE_SERVICE_ACCOUNT_JSON environment variable or provide the Render Secret File /etc/secrets/firebase-service-account.json.');
     err.code='FIREBASE_ADMIN_NOT_CONFIGURED';
     throw err;
   }
   let serviceAccount;
   try{serviceAccount=JSON.parse(raw)}catch(e){
-    const err=new Error('FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON. Paste the complete service-account JSON as one environment-variable value.');
+    const err=new Error('Firebase service-account credentials are not valid JSON. Check the FIREBASE_SERVICE_ACCOUNT_JSON value or firebase-service-account.json Secret File.');
     err.code='FIREBASE_ADMIN_BAD_CREDENTIALS';
     throw err;
   }
