@@ -8,36 +8,6 @@ const Database=require('better-sqlite3');
 const rateLimit=require('express-rate-limit');
 const firebaseAdmin=require('firebase-admin');
 
-const FIREBASE_SERVICE_ACCOUNT_PATH =
-  '/etc/secrets/firebase-service-account.json';
-
-const serviceAccount = JSON.parse(
-  fs.readFileSync(FIREBASE_SERVICE_ACCOUNT_PATH, 'utf8')
-);
-
-firebaseAdmin.initializeApp({
-  credential: firebaseAdmin.credential.cert(serviceAccount)
-});
-
-const firebaseAuth = firebaseAdmin.auth();
-const firestore = firebaseAdmin.firestore();
-async function nextFirebaseAbsId(mobile){
-  const snap = await firestore.collection('users').get();
-
-  let maxSerial = 1000;
-
-  snap.forEach(doc => {
-    const d = doc.data();
-    if(Number.isFinite(Number(d.absSerial))){
-      maxSerial = Math.max(maxSerial, Number(d.absSerial));
-    }
-  });
-
-  const serial = maxSerial + 1;
-  const absId = `ABS${mobile.slice(-2)}${serial}`;
-
-  return { absId, absSerial: serial };
-}
 const ROOT=path.join(__dirname,'..');
 const DB_DIR=path.join(ROOT,'data'); fs.mkdirSync(DB_DIR,{recursive:true});
 const db=new Database(path.join(DB_DIR,'abs-dashboard.sqlite'));
@@ -53,7 +23,39 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
 const JWT_SECRET=process.env.JWT_SECRET||'CHANGE_THIS_ABS_SECRET_IN_PRODUCTION';
 const ADMIN_USER=process.env.ADMIN_USER||'riyazalipvt@gmail.com';
 const ADMIN_PASS=process.env.ADMIN_PASS||'Shkriyaz@abs70';
+const FIREBASE_ADMIN_UID=process.env.FIREBASE_ADMIN_UID||'5OjOnepPFOYe49OspKbpBWy3x2e2';
 function now(){return new Date().toISOString()}
+function getFirebaseAdmin(){
+  if(firebaseAdmin.apps.length) return firebaseAdmin;
+  const raw=process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if(!raw){
+    const err=new Error('Firebase Admin is not configured on Render. Add FIREBASE_SERVICE_ACCOUNT_JSON in the backend environment variables.');
+    err.code='FIREBASE_ADMIN_NOT_CONFIGURED';
+    throw err;
+  }
+  let serviceAccount;
+  try{serviceAccount=JSON.parse(raw)}catch(e){
+    const err=new Error('FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON. Paste the complete service-account JSON as one environment-variable value.');
+    err.code='FIREBASE_ADMIN_BAD_CREDENTIALS';
+    throw err;
+  }
+  firebaseAdmin.initializeApp({
+    credential:firebaseAdmin.credential.cert(serviceAccount),
+    projectId:process.env.FIREBASE_PROJECT_ID||serviceAccount.project_id||'abs-dashboard-dd0b2'
+  });
+  return firebaseAdmin;
+}
+function publicAdminError(res,e){
+  console.error('Firebase Admin operation failed:',e);
+  if(e.code==='FIREBASE_ADMIN_NOT_CONFIGURED'||e.code==='FIREBASE_ADMIN_BAD_CREDENTIALS'){
+    return res.status(503).json({error:e.message});
+  }
+  if(e.code==='auth/user-not-found'||e.code==='not-found'){
+    return res.status(404).json({error:'Firebase user/profile was not found.'});
+  }
+  return res.status(500).json({error:e.message||'Firebase Admin operation failed.'});
+}
+
 function nextAbsId(mobile){const last=mobile.slice(-2); const row=db.prepare("SELECT COUNT(*) c FROM users WHERE mobile LIKE ?").get('%'); return `ABS${last}${1001+row.c}`}
 function sign(u){return jwt.sign({sub:u.id,mobile:u.mobile,role:'user'},JWT_SECRET,{expiresIn:'7d'})}
 function auth(req,res,next){try{const h=req.headers.authorization||'';if(!h.startsWith('Bearer '))throw 0;const p=jwt.verify(h.slice(7),JWT_SECRET);const u=db.prepare('SELECT id,abs_id,name,mobile,verified,premium,avatar,created_at FROM users WHERE id=?').get(p.sub);if(!u)throw 0;req.user=u;next()}catch(e){res.status(401).json({error:'Unauthorized'})}}
@@ -75,108 +77,100 @@ app.post('/api/loans',auth,(req,res)=>{const x=req.body||{};if(!x.name)return re
 app.get('/api/summary',auth,(req,res)=>{const t=db.prepare(`SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) income,COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) expense,COUNT(*) entries FROM transactions WHERE user_id=?`).get(req.user.id);res.json({...t,net:t.income-t.expense})});
 app.post('/api/feedback',auth,(req,res)=>{const x=req.body||{};db.prepare('INSERT INTO feedback(user_id,name,mobile,type,rating,message,created_at) VALUES(?,?,?,?,?,?,?)').run(req.user.id,req.user.name,req.user.mobile,x.type||'Feedback',Number(x.rating||0),x.message||'',now());res.status(201).json({ok:true})});
 app.get('/api/ads',(req,res)=>res.json({items:db.prepare('SELECT id,title,text,badge,image,link FROM ads WHERE active=1 ORDER BY id DESC').all()}));
+app.get('/api/admin/ads',admin,(req,res)=>res.json({items:db.prepare('SELECT id,title,text,badge,image,link,active,created_at FROM ads ORDER BY id DESC').all().map(x=>({...x,active:!!x.active}))}));
 app.post('/api/admin/login',(req,res)=>{const {username,password}=req.body||{};if(username!==ADMIN_USER||password!==ADMIN_PASS)return res.status(401).json({error:'Invalid admin credentials'});res.json({token:jwt.sign({role:'admin'},JWT_SECRET,{expiresIn:'8h'})})});
 app.get('/api/admin/users',admin,(req,res)=>res.json({items:db.prepare('SELECT id,abs_id,name,mobile,verified,premium,created_at,updated_at FROM users ORDER BY id DESC').all()}));
 app.post('/api/admin/users',admin,(req,res)=>{const {name,mobile,password}=req.body||{};if(!name||!/^[6-9]\d{9}$/.test(String(mobile||''))||String(password||'').length<6)return res.status(400).json({error:'Name, valid 10-digit mobile and 6+ character password are required'});if(db.prepare('SELECT 1 FROM users WHERE mobile=?').get(mobile))return res.status(409).json({error:'Mobile number already registered'});const created=now(),hash=bcrypt.hashSync(password,12),absId=nextAbsId(String(mobile));const info=db.prepare('INSERT INTO users(abs_id,name,mobile,password_hash,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(absId,name,mobile,hash,created,created);res.status(201).json({user:db.prepare('SELECT id,abs_id,name,mobile,verified,premium,created_at,updated_at FROM users WHERE id=?').get(info.lastInsertRowid)});});
 app.get('/api/admin/summary',admin,(req,res)=>{const users=db.prepare('SELECT COUNT(*) c FROM users').get().c;const verified=db.prepare('SELECT COUNT(*) c FROM users WHERE verified=1').get().c;const premium=db.prepare('SELECT COUNT(*) c FROM users WHERE premium=1').get().c;const feedback=db.prepare('SELECT COUNT(*) c FROM feedback').get().c;const ads=db.prepare('SELECT COUNT(*) c FROM ads WHERE active=1').get().c;res.json({users,verified,premium,feedback,ads});});
+// Firebase is the source of truth for accounts used by the GitHub Pages app.
+app.get('/api/admin/firebase-users',admin,async(req,res)=>{
+  try{
+    const sdk=getFirebaseAdmin();
+    const snap=await sdk.firestore().collection('users').get();
+    const items=snap.docs.map(doc=>({uid:doc.id,...doc.data()}));
+    res.json({items});
+  }catch(e){publicAdminError(res,e)}
+});
+
+app.patch('/api/admin/firebase-users/:uid',admin,async(req,res)=>{
+  const uid=String(req.params.uid||'').trim();
+  if(!uid) return res.status(400).json({error:'A Firebase UID is required.'});
+  try{
+    const sdk=getFirebaseAdmin();
+    await sdk.auth().getUser(uid);
+    const ref=sdk.firestore().collection('users').doc(uid);
+    const snap=await ref.get();
+    if(!snap.exists) return res.status(404).json({error:'Firebase profile was not found.'});
+    const old=snap.data()||{};
+    const input=req.body||{};
+    const update={updatedAt:now()};
+    if(typeof input.name==='string'){
+      const name=input.name.trim();
+      if(!name) return res.status(400).json({error:'Display name cannot be empty.'});
+      update.name=name;
+    }
+    if(typeof input.absId==='string'){
+      const absId=input.absId.trim();
+      if(!absId) return res.status(400).json({error:'ABS ID cannot be empty.'});
+      update.absId=absId;
+    }
+    if(typeof input.verified==='boolean'){
+      update.verified=input.verified;
+      // Blue tick and Premium are the same entitlement in this app.
+      update.premium=input.verified;
+    }
+    const nameChanged=typeof update.name==='string'&&update.name!==String(old.name||'');
+    const idChanged=typeof update.absId==='string'&&update.absId!==String(old.absId||'');
+    const verificationChanged=typeof input.verified==='boolean'&&input.verified!==(old.verified===true);
+    if(verificationChanged){
+      update.adminNotice={
+        id:`verification-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+        type:'verification',
+        message:input.verified?'Your ABS account is now verified. Your blue tick and Premium access are unlocked.':'Admin has updated your ABS verification status.',
+        updatedAt:now()
+      };
+    }else if(nameChanged||idChanged){
+      update.adminNotice={
+        id:`profile-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+        type:'profile',
+        message:nameChanged?`Admin updated your display name to ${update.name}.`:'Admin updated your ABS account profile.',
+        updatedAt:now()
+      };
+    }
+    if(Object.keys(update).length===1) return res.status(400).json({error:'No supported user fields were provided.'});
+    await ref.set(update,{merge:true});
+    const after=await ref.get();
+    res.json({ok:true,user:{uid,...after.data()}});
+  }catch(e){publicAdminError(res,e)}
+});
+
+app.delete('/api/admin/firebase-users/:uid',admin,async(req,res)=>{
+  const uid=String(req.params.uid||'').trim();
+  if(!uid) return res.status(400).json({error:'A Firebase UID is required.'});
+  if(uid===FIREBASE_ADMIN_UID) return res.status(403).json({error:'The administrator account cannot be deleted from this endpoint.'});
+  try{
+    const sdk=getFirebaseAdmin();
+    let authDeleted=false;
+    try{
+      await sdk.auth().deleteUser(uid);
+      authDeleted=true;
+    }catch(e){
+      // Allow cleanup of a profile whose Auth user was already removed.
+      if(e.code!=='auth/user-not-found') throw e;
+    }
+    try{
+      await sdk.firestore().recursiveDelete(sdk.firestore().collection('users').doc(uid));
+    }catch(e){
+      console.error('Firebase user data cleanup failed after Auth deletion:',e);
+      return res.status(500).json({error:'Firebase Auth account was removed, but Firestore data cleanup failed. Check the Render service-account permissions and retry cleanup.',accountDeleted:authDeleted,uid});
+    }
+    res.json({ok:true,uid,authDeleted,dataDeleted:true});
+  }catch(e){publicAdminError(res,e)}
+});
+
 app.patch('/api/admin/users/:id',admin,(req,res)=>{const {verified,premium,abs_id,name}=req.body||{};db.prepare('UPDATE users SET verified=COALESCE(?,verified),premium=COALESCE(?,premium),abs_id=COALESCE(?,abs_id),name=COALESCE(?,name),updated_at=? WHERE id=?').run(verified==null?null:(verified?1:0),premium==null?null:(premium?1:0),abs_id||null,name||null,now(),req.params.id);res.json({ok:true})});
 app.delete('/api/admin/users/:id',admin,(req,res)=>{db.prepare('DELETE FROM users WHERE id=?').run(req.params.id);res.json({ok:true})});
 app.post('/api/admin/users/:id/reset-password',admin,(req,res)=>{const p=String(req.body?.password||'');if(p.length<6)return res.status(400).json({error:'Password must be at least 6 characters'});db.prepare('UPDATE users SET password_hash=?,updated_at=? WHERE id=?').run(bcrypt.hashSync(p,12),now(),req.params.id);res.json({ok:true})});
-app.post('/api/admin/firebase-users', admin, async (req,res)=>{
-  try{
-    const {
-      name,
-      mobile,
-      password
-    } = req.body;
-
-    if(!name || !mobile || !password){
-      return res.status(400).json({
-        error:'Name, mobile and password are required.'
-      });
-    }
-
-    if(!/^[6-9]\d{9}$/.test(mobile)){
-      return res.status(400).json({
-        error:'Enter a valid 10-digit Indian mobile number.'
-      });
-    }
-
-    if(password.length < 6){
-      return res.status(400).json({
-        error:'Password must be at least 6 characters.'
-      });
-    }
-
-    const email = `${mobile}@absdashboard.app`;
-
-    // Check whether Firebase account already exists
-    try{
-      const existing = await firebaseAuth.getUserByEmail(email);
-
-      if(existing){
-        return res.status(409).json({
-          error:'An account already exists for this mobile number.'
-        });
-      }
-    }catch(err){
-      if(err.code !== 'auth/user-not-found'){
-        throw err;
-      }
-    }
-
-    // Generate ABS ID
-    const { absId, absSerial } =
-      await nextFirebaseAbsId(mobile);
-
-    // Create Firebase Authentication user
-    const userRecord =
-      await firebaseAuth.createUser({
-        email,
-        password,
-        displayName:name
-      });
-
-    // Create Firestore profile
-    await firestore
-      .collection('users')
-      .doc(userRecord.uid)
-      .set({
-        name,
-        mobile,
-        absId,
-        absSerial,
-        createdAt:now(),
-        premium:false,
-        verified:false,
-        income:0,
-        expense:0,
-        net:0,
-        entries:0,
-        lastActive:now()
-      });
-
-    res.json({
-      ok:true,
-      message:'User created successfully.',
-      user:{
-        uid:userRecord.uid,
-        name,
-        mobile,
-        email,
-        absId,
-        absSerial
-      }
-    });
-
-  }catch(err){
-    console.error('Firebase user creation failed:',err);
-
-    res.status(500).json({
-      error:err.message || 'Unable to create user.'
-    });
-  }
-});
 app.get('/api/admin/feedback',admin,(req,res)=>res.json({items:db.prepare('SELECT * FROM feedback ORDER BY id DESC').all()}));
 app.post('/api/admin/ads',admin,(req,res)=>{const x=req.body||{};const info=db.prepare('INSERT INTO ads(title,text,badge,image,link,active,created_at) VALUES(?,?,?,?,?,?,?)').run(x.title||'',x.text||'',x.badge||'FEATURED',x.image||'',x.link||'',x.active===false?0:1,now());res.status(201).json({item:db.prepare('SELECT * FROM ads WHERE id=?').get(info.lastInsertRowid)})});
 app.patch('/api/admin/ads/:id',admin,(req,res)=>{const x=req.body||{};db.prepare('UPDATE ads SET title=COALESCE(?,title),text=COALESCE(?,text),badge=COALESCE(?,badge),image=COALESCE(?,image),link=COALESCE(?,link),active=COALESCE(?,active) WHERE id=?').run(x.title??null,x.text??null,x.badge??null,x.image??null,x.link??null,x.active==null?null:(x.active?1:0),req.params.id);res.json({ok:true})});
