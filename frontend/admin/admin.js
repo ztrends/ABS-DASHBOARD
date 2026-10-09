@@ -4,6 +4,7 @@ const ADMIN_UID = '5OjOnepPFOYe49OspKbpBWy3x2e2';
 const $ = id => document.getElementById(id);
 let adminToken = sessionStorage.getItem('abs_admin_token') || '';
 let state = { users: [], feedback: [], ads: [], summary: {} };
+let refreshInProgress = false;
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
@@ -93,44 +94,93 @@ async function adminLogout(){
   showLogin();
 }
 
-async function refreshAdmin(){
-  try{
-    ensureFirebase();
+function setAdminRefreshStatus(message, isError = false){
+  let node = $('adminRefreshStatus');
+  if(!node){
+    node = document.createElement('span');
+    node.id = 'adminRefreshStatus';
+    node.style.cssText = 'display:inline-block;max-width:100%;font-size:12px;line-height:1.4;margin:4px 8px;color:var(--muted,#8a93a5);';
+    const host = document.querySelector('.actions') || document.querySelector('header') || document.getElementById('app');
+    if(host) host.appendChild(node);
+  }
+  if(node){
+    node.textContent = message;
+    node.style.color = isError ? '#ef6464' : 'var(--muted,#8a93a5)';
+  }
+}
 
-    const current = firebase.auth().currentUser;
+async function waitForAdminAuth(){
+  ensureFirebase();
+  const auth = firebase.auth();
+  if(auth.currentUser) return auth.currentUser;
+  return await new Promise(resolve => {
+    let unsubscribe = null;
+    const timer = setTimeout(() => {
+      try{ unsubscribe && unsubscribe(); }catch{}
+      resolve(auth.currentUser || null);
+    }, 8000);
+    unsubscribe = auth.onAuthStateChanged(user => {
+      clearTimeout(timer);
+      try{ unsubscribe && unsubscribe(); }catch{}
+      resolve(user || null);
+    });
+  });
+}
+
+async function refreshAdmin(){
+  if(refreshInProgress) return;
+  refreshInProgress = true;
+  const refreshButtons = [...document.querySelectorAll('button')].filter(btn =>
+    /refresh/i.test(`${btn.textContent || ''} ${btn.getAttribute('onclick') || ''}`)
+  );
+  const previousLabels = refreshButtons.map(btn => btn.textContent);
+  refreshButtons.forEach(btn => { btn.disabled = true; if(/refresh/i.test(btn.textContent||'')) btn.textContent = '↻ Refreshing…'; });
+  setAdminRefreshStatus('Refreshing users, banners and feedback…');
+
+  try{
+    const current = await waitForAdminAuth();
     if(!current || current.uid !== ADMIN_UID){
-      throw new Error('Administrator authorization failed.');
+      throw new Error('Administrator authorization failed. Please log in again.');
     }
 
-    const snap = await firebase.firestore().collection('users').get();
+    // Read current Firestore data through the trusted API to avoid stale browser cache/rules failures.
+    const usersResponse = await api('/admin/firebase-users');
+    state.users = Array.isArray(usersResponse.items) ? usersResponse.items : [];
 
-    state.users = snap.docs.map(doc => ({
-      uid: doc.id,
-      ...doc.data()
-    }));
-
-    const ads = await api('/ads').catch(() => ({items:[]}));
-    state.ads = ads.items || [];
-
-    const feedback = await api('/admin/feedback').catch(() => ({items:[]}));
-    state.feedback = feedback.items || [];
+    const warnings = [];
+    const [adsResult, feedbackResult] = await Promise.allSettled([
+      api('/admin/ads'),
+      api('/admin/feedback')
+    ]);
+    if(adsResult.status === 'fulfilled') state.ads = Array.isArray(adsResult.value.items) ? adsResult.value.items : [];
+    else { state.ads = []; warnings.push(`banners: ${adsResult.reason?.message || 'failed'}`); }
+    if(feedbackResult.status === 'fulfilled') state.feedback = Array.isArray(feedbackResult.value.items) ? feedbackResult.value.items : [];
+    else { state.feedback = []; warnings.push(`feedback: ${feedbackResult.reason?.message || 'failed'}`); }
 
     state.summary = {
       users: state.users.length,
       verified: state.users.filter(u => u.verified === true).length,
-      premium: state.users.filter(u => u.premium === true).length,
+      premium: state.users.filter(u => u.verified === true).length,
       feedback: state.feedback.length,
-      ads: state.ads.filter(a => a.active).length
+      ads: state.ads.filter(a => a.active === true || a.active === 1).length
     };
 
     renderStats();
     renderUsers();
     renderAds();
     renderFeedback();
+    setAdminRefreshStatus(warnings.length
+      ? `Users refreshed; some data could not load (${warnings.join('; ')}).`
+      : `Updated just now · ${state.users.length} users · ${state.ads.length} banners · ${state.feedback.length} feedback items.`, warnings.length > 0);
 
   }catch(e){
-    console.error(e);
-    $('loginMsg').textContent = e.message || 'Unable to load admin data.';
+    console.error('ABS Admin refresh failed:', e);
+    setAdminRefreshStatus(e.message || 'Unable to refresh admin data.', true);
+    const msg = $('loginMsg');
+    if(msg) msg.textContent = e.message || 'Unable to load admin data.';
+  }finally{
+    refreshButtons.forEach((btn, i) => { btn.disabled = false; if(previousLabels[i] != null) btn.textContent = previousLabels[i]; });
+    refreshInProgress = false;
   }
 }
 
@@ -158,7 +208,7 @@ function renderUsers(){
             <div class="mobile">${esc(u.mobile || '')}</div>
             <div class="sub">
               <b>ABS ID:</b> ${esc(u.absId || '—')} ·
-              ${u.premium ? 'PREMIUM' : 'STANDARD'}
+              ${u.verified ? 'BLUE TICK ACTIVE' : 'STANDARD ACCOUNT'}
             </div>
           </div>
           <span class="badge">
@@ -179,6 +229,10 @@ function renderUsers(){
           <button class="btn ${u.verified ? 'secondary' : 'blue'}"
             onclick="toggleVerified('${escAttr(u.uid)}',${!u.verified})">
             ${u.verified ? 'REMOVE BLUE TICK' : '✓ VERIFY ACCOUNT'}
+          </button>
+          <button class="btn danger"
+            onclick="deleteUser('${escAttr(u.uid)}')">
+            DELETE ACCOUNT
           </button>
         </div>
       </div>
@@ -220,18 +274,16 @@ function openUserManager(uid){
         ${u.verified ? 'REMOVE BLUE TICK' : '✓ VERIFY ACCOUNT'}
       </button>
 
-      <button class="btn ok"
-        onclick="togglePremium('${escAttr(u.uid)}',${!u.premium})">
-        ${u.premium ? 'REMOVE PREMIUM' : 'MAKE PREMIUM'}
+      <button class="btn danger"
+        onclick="deleteUser('${escAttr(u.uid)}')">
+        DELETE ACCOUNT
       </button>
     </div>
 
     <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
 
     <div class="sub">
-      Password reset and account deletion require Firebase Admin
-      privileges on the server. They are not executed through the
-      browser-only admin page.
+      Verification also unlocks Premium. Delete Account permanently removes this user's Firebase sign-in and saved profile data.
     </div>
   `;
 
@@ -241,70 +293,41 @@ function openUserManager(uid){
 async function saveUser(uid){
   const name = $('editName').value.trim();
   const absId = $('editAbsId').value.trim();
-
   if(!name || !absId){
-    return $('userMsg').textContent =
-      'Name and ABS ID are required.';
+    return $('userMsg').textContent = 'Name and ABS ID are required.';
   }
-
+  const msg = $('userMsg');
+  if(msg) msg.textContent = 'Saving changes…';
   try{
-    ensureFirebase();
-
-    await firebase.firestore()
-      .collection('users')
-      .doc(uid)
-      .set({
-        name,
-        absId,
-        lastActive: new Date().toISOString()
-      }, {merge:true});
-
+    await api(`/admin/firebase-users/${encodeURIComponent(uid)}`, {
+      method:'PATCH',
+      body:JSON.stringify({name,absId})
+    });
     closeModal();
     await refreshAdmin();
-
+    setAdminRefreshStatus(`Updated profile for ${name}. The user will see an in-app notice.`);
   }catch(e){
-    console.error(e);
-    $('userMsg').textContent =
-      e.message || 'Unable to update user.';
+    console.error('Admin user update failed:', e);
+    if(msg) msg.textContent = e.message || 'Unable to update user.';
+    else alert(e.message || 'Unable to update user.');
   }
 }
 
 async function toggleVerified(uid, value){
+  const user = state.users.find(x => x.uid === uid);
+  if(!user) return alert('User account could not be found. Refresh and try again.');
   try{
-    ensureFirebase();
-
-    await firebase.firestore()
-      .collection('users')
-      .doc(uid)
-      .set({
-        verified: !!value
-      }, {merge:true});
-
+    await api(`/admin/firebase-users/${encodeURIComponent(uid)}`, {
+      method:'PATCH',
+      body:JSON.stringify({verified:!!value})
+    });
     await refreshAdmin();
-
+    setAdminRefreshStatus(value
+      ? `Blue tick unlocked for ${user.name || user.mobile}. User will receive an in-app notice.`
+      : `Blue tick removed for ${user.name || user.mobile}. User will receive an in-app notice.`);
   }catch(e){
-    console.error(e);
+    console.error('Admin verification update failed:', e);
     alert(e.message || 'Unable to update verification.');
-  }
-}
-
-async function togglePremium(uid, value){
-  try{
-    ensureFirebase();
-
-    await firebase.firestore()
-      .collection('users')
-      .doc(uid)
-      .set({
-        premium: !!value
-      }, {merge:true});
-
-    closeModal();
-    await refreshAdmin();
-
-  }catch(e){
-    console.error(e);
-    alert(e.message || 'Unable to update premium.');
   }
 }
 
@@ -324,98 +347,42 @@ function changePassword(){
   `;
 }
 
-function deleteUser(){
-  $('modalTitle').textContent = 'Delete User Account';
-  $('modalBody').innerHTML = `
-    <div class="msg">
-      Account deletion is not connected to Firebase Admin yet.
-      The Firebase Authentication account must be deleted from
-      a trusted server/Admin SDK.
-    </div>
-  `;
+async function deleteUser(uid){
+  const user = state.users.find(x => x.uid === uid);
+  if(!uid || !user) return alert('User account could not be found. Refresh and try again.');
+  if(uid === ADMIN_UID) return alert('The administrator account cannot be deleted from this panel.');
+  const display = `${user.name || 'User'} (${user.mobile || uid})`;
+  if(!confirm(`Permanently delete ${display}? This removes the Firebase sign-in and the user's saved ABS profile/data. This cannot be undone.`)) return;
+  const typed = prompt(`To confirm permanent deletion, type DELETE exactly.
+
+Account: ${display}`);
+  if(typed !== 'DELETE') return alert('Deletion cancelled. Nothing was changed.');
+  try{
+    setAdminRefreshStatus(`Deleting ${display}…`);
+    await api(`/admin/firebase-users/${encodeURIComponent(uid)}`, {method:'DELETE'});
+    closeModal();
+    await refreshAdmin();
+    setAdminRefreshStatus(`Deleted ${display}.`);
+    alert('Account deleted successfully.');
+  }catch(e){
+    console.error('Firebase account deletion failed:', e);
+    alert(e.message || 'Account could not be deleted.');
+    setAdminRefreshStatus(e.message || 'Account deletion failed.', true);
+  }
 }
 
 async function openCreateUser(){
   $('modalTitle').textContent = 'Create User Account';
 
   $('modalBody').innerHTML = `
-    <label>Name</label>
-    <input id="createUserName"
-      type="text"
-      placeholder="Enter user name">
-
-    <label>Mobile Number</label>
-    <input id="createUserMobile"
-      type="tel"
-      inputmode="numeric"
-      maxlength="10"
-      placeholder="10-digit mobile number">
-
-    <label>Password</label>
-    <input id="createUserPassword"
-      type="password"
-      placeholder="Minimum 6 characters">
-
-    <div id="createUserMsg" class="msg"></div>
-
-    <button
-      class="btn full"
-      style="margin-top:16px"
-      onclick="submitCreateUser()">
-      CREATE USER
-    </button>
+    <p class="muted">
+      Create User is temporarily disabled here because the main app
+      uses Firebase Authentication. Creating a SQLite-only user would
+      make the account invisible to the main app.
+    </p>
   `;
 
   $('modal').classList.remove('hidden');
-}
-
-async function submitCreateUser(){
-  const name = $('createUserName').value.trim();
-  const mobile = $('createUserMobile').value.trim();
-  const password = $('createUserPassword').value;
-
-  const msg = $('createUserMsg');
-  msg.textContent = '';
-
-  if(!name){
-    return msg.textContent = 'Enter user name.';
-  }
-
-  if(!/^[6-9]\d{9}$/.test(mobile)){
-    return msg.textContent =
-      'Enter a valid 10-digit Indian mobile number.';
-  }
-
-  if(password.length < 6){
-    return msg.textContent =
-      'Password must be at least 6 characters.';
-  }
-
-  try{
-    const result = await api('/admin/firebase-users',{
-      method:'POST',
-      body:JSON.stringify({
-        name,
-        mobile,
-        password
-      })
-    });
-
-    alert(
-      `User created successfully!\n\n` +
-      `Name: ${result.user.name}\n` +
-      `Mobile: ${result.user.mobile}\n` +
-      `ABS ID: ${result.user.absId}`
-    );
-
-    closeModal();
-    await refreshAdmin();
-
-  }catch(e){
-    console.error('Create user failed:',e);
-    msg.textContent =
-      e.message || 'Unable to create user.';
-  }
 }
 
 function createUser(){
@@ -616,11 +583,17 @@ if(adminToken){
 
 window.login = login;
 window.refreshAdmin = refreshAdmin;
+window.addEventListener('DOMContentLoaded', () => {
+  [...document.querySelectorAll('button')].filter(btn => /refresh/i.test(`${btn.textContent || ''} ${btn.getAttribute('onclick') || ''}`)).forEach(btn => {
+    if(btn.dataset.absRefreshBound === '1') return;
+    btn.dataset.absRefreshBound = '1';
+    btn.addEventListener('click', () => { refreshAdmin(); });
+  });
+});
 window.adminLogout = adminLogout;
 window.openCreateUser = openCreateUser;
 window.openUserManager = openUserManager;
 window.toggleVerified = toggleVerified;
-window.togglePremium = togglePremium;
 window.changePassword = changePassword;
 window.deleteUser = deleteUser;
 window.saveUser = saveUser;
