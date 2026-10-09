@@ -3,7 +3,9 @@ const EMPTY_DATA = () => ({income:[],expenses:[],loans:[],emi:[],people:[],ledge
 function readSession(){try{const raw=localStorage.getItem("abs_user");if(raw)return JSON.parse(raw)}catch(e){};try{const m=document.cookie.match(/(?:^|; )abs_session=([^;]+)/);if(m)return JSON.parse(decodeURIComponent(m[1]))}catch(e){};return null}
 function persistSession(user){localStorage.setItem("abs_user",JSON.stringify(user));document.cookie="abs_session="+encodeURIComponent(JSON.stringify(user))+"; path=/; max-age=31536000; SameSite=Lax"}
 function clearSession(){localStorage.removeItem("abs_user");document.cookie="abs_session=; path=/; max-age=0; SameSite=Lax"}
-const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("abs_theme")||"dark",data:null,admin:false};
+const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("abs_theme")||"dark",data:null,admin:false,remoteAds:[],adsLoaded:false,adsLoading:false,adsFetchedAt:0};
+let userProfileUnsubscribe = null;
+const ABS_PUBLIC_API_BASE = "https://abs-dashboard-t7up.onrender.com/api";
 
 // Initialize Firebase once the Firebase compat scripts and config from index.html are available.
 (function initABSFirebase(){
@@ -130,7 +132,24 @@ function normalizeDate(v){if(!v)return new Date().toISOString().slice(0,10);v=St
 function feedbackList(){return JSON.parse(localStorage.getItem("abs_feedback")||"[]")}
 function saveFeedbackItem(item){const all=feedbackList();all.unshift(item);localStorage.setItem("abs_feedback",JSON.stringify(all))}
 function premiumRequests(){try{return JSON.parse(localStorage.getItem("abs_premium_requests")||"[]")}catch(e){return[]}}
-function isVerified(){const u=userRegistry().find(x=>x.mobile===state.user?.mobile);return u?.verified===true}
+function isVerified(){return state.user?.verified===true}
+function stopUserProfileWatch(){if(userProfileUnsubscribe){userProfileUnsubscribe();userProfileUnsubscribe=null}}
+function watchUserProfile(authUser){
+  stopUserProfileWatch();
+  if(!firebaseAdminReady()||!authUser||!state.user||authUser.uid!==state.user.uid)return;
+  userProfileUnsubscribe=firebase.firestore().collection("users").doc(authUser.uid).onSnapshot(doc=>{
+    if(!doc.exists)return;
+    const p=doc.data()||{};
+    const oldVerified=state.user?.verified===true;
+    const oldPremium=state.user?.premium===true;
+    state.user={...state.user,name:p.name||state.user.name,absId:p.absId||state.user.absId,verified:p.verified===true,premium:p.premium===true};
+    persistSession(state.user);
+    const users=userRegistry();
+    const record=users.find(x=>x.uid===authUser.uid||x.mobile===state.user.mobile);
+    if(record){record.name=state.user.name;record.absId=state.user.absId||record.absId;record.verified=state.user.verified;record.premium=state.user.premium;record.uid=authUser.uid;localStorage.setItem("abs_users",JSON.stringify(users))}
+    if(state.tab==="profile"&&(oldVerified!==state.user.verified||oldPremium!==state.user.premium))renderProfile();
+  },err=>console.error("ABS user profile sync failed:",err));
+}
 function requestPremium(){if(!state.user)return; if(isVerified()){toast("Premium is already unlocked");return} const all=premiumRequests();if(all.some(x=>x.mobile===state.user.mobile&&x.status==="pending")){toast("Premium request is already pending");return}all.unshift({id:uid(),name:state.user.name,mobile:state.user.mobile,status:"pending",createdAt:new Date().toISOString()});localStorage.setItem("abs_premium_requests",JSON.stringify(all));renderProfile();toast("Premium request sent to admin") }
 function refreshAppData(){if(!state.user)return;ensureData();syncUserRegistry();state.refreshToken=Date.now();render();if(state.tab==="dashboard")toast("Dashboard refreshed")}
 function animateMoney(selector,target,duration=900){const el=$(selector);if(!el)return;const start=Number(el.dataset.current||0);const end=Number(target||0);const t0=performance.now();const ease=t=>1-Math.pow(1-t,3);function tick(now){const p=Math.min(1,(now-t0)/duration);const val=start+(end-start)*ease(p);el.textContent=money(val);if(p<1)requestAnimationFrame(tick);else{el.dataset.current=String(end);el.textContent=money(end)}}requestAnimationFrame(tick)}
@@ -175,7 +194,7 @@ function adminResetUserPassword(mobile){
   openModal("Secure password reset required",`<div class="workspace-hero"><div class="workspace-icon">🔒</div><div><div class="eyebrow">ACCOUNT SECURITY</div><h3>Cannot reset this password from the browser</h3><p>The account for <b>${esc(mobile)}</b> uses Firebase Authentication. A browser-only password change would not update the real sign-in password. No changes have been made.</p><p class="muted">To enable admin password reset, connect this action to a protected server endpoint using Firebase Admin SDK.</p></div></div><button class="primary full" type="button" onclick="closeModal()">CLOSE</button>`);
 }
 function deleteFeedback(id){if(!state.admin)return;if(!confirm("Delete this feedback?"))return;localStorage.setItem("abs_feedback",JSON.stringify(feedbackList().filter(x=>x.id!==id)));openAdminPanel();toast("Feedback deleted")}
-function setup(){document.body.classList.toggle("light",state.theme==="light");if(state.user){const rec=ensureAbsIds().find(u=>u.mobile===state.user.mobile);if(rec)state.user.absId=rec.absId;const exists=userRegistry().some(u=>u.mobile===state.user.mobile);if(!exists){clearSession();state.user=null;state.data=EMPTY_DATA();}else{ensureData();$("#authScreen").classList.add("hidden");$("#mainApp").classList.remove("hidden");$("#greeting").textContent=greet(state.user.name);render();return}}$("#authScreen").classList.remove("hidden");$("#mainApp").classList.add("hidden")}
+function setup(){document.body.classList.toggle("light",state.theme==="light");if(state.user){if(typeof state.user.verified!=="boolean")state.user.verified=false;if(typeof state.user.premium!=="boolean")state.user.premium=false;const rec=ensureAbsIds().find(u=>u.mobile===state.user.mobile);if(rec)state.user.absId=rec.absId;const exists=userRegistry().some(u=>u.mobile===state.user.mobile);if(!exists){clearSession();state.user=null;state.data=EMPTY_DATA();}else{ensureData();$("#authScreen").classList.add("hidden");$("#mainApp").classList.remove("hidden");$("#greeting").textContent=greet(state.user.name);render();return}}$("#authScreen").classList.remove("hidden");$("#mainApp").classList.add("hidden")}
 $("#showRegister").onclick=()=>{$("#loginPanel").classList.add("hidden");$("#registerPanel").classList.remove("hidden")};$("#showLogin").onclick=()=>{$("#registerPanel").classList.add("hidden");$("#loginPanel").classList.remove("hidden")};
 $("#registerForm").onsubmit=async e=>{
   e.preventDefault();
@@ -242,7 +261,9 @@ $("#registerForm").onsubmit=async e=>{
       name:n,
       mobile:m,
       absId:absId,
-      uid:cred.user.uid
+      uid:cred.user.uid,
+      verified:false,
+      premium:false
     };
 
     state.data=EMPTY_DATA();
@@ -341,7 +362,9 @@ $("#loginForm").onsubmit=async e=>{
       name:u.name||"User",
       mobile:u.mobile||m,
       absId:u.absId||"",
-      uid:cred.user.uid
+      uid:cred.user.uid,
+      verified:u.verified===true,
+      premium:u.premium===true
     };
 
     const dataSnap=
@@ -685,7 +708,50 @@ doc.setFontSize(23);doc.text('ABS STATEMENT',M+68,48);doc.setFont('helvetica','n
  if(!rows.length){doc.setTextColor(...muted);doc.setFont('helvetica','normal');doc.setFontSize(9);doc.text('No transactions found for the selected period.',M+10,y+20);y+=30}
  if(y>H-120){footer();doc.addPage();page++;header();y=162}y+=14;doc.setFillColor(...ink);doc.roundedRect(M,y,W-2*M,68,12,12,'F');doc.setTextColor(255,255,255);doc.setFont('helvetica','bold');doc.setFontSize(9);doc.text('STATEMENT TOTALS',M+14,y+20);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(`Money In  ${fmt(credit)}    ·    Money Out  ${fmt(debit)}    ·    Net  ${fmt(net)}`,M+14,y+38);doc.text(`${rows.length} record(s) included for ${title}.`,M+14,y+53);footer();doc.save(`ABS-Statement-${filter}-${new Date().toISOString().slice(0,10)}.pdf`)
 }
-function renderAds(){const ads=JSON.parse(localStorage.getItem("abs_ads")||"[]").filter(x=>x.active!==false);if(!ads.length)return"";const id="ad_"+Date.now();setTimeout(()=>{const el=document.getElementById(id);if(!el)return;const slides=[...el.querySelectorAll(".ad-slide")],dots=[...el.querySelectorAll(".ad-dot")];let i=0;const show=()=>{slides.forEach((c,n)=>c.classList.toggle("active",n===i));dots.forEach((d,n)=>d.classList.toggle("active",n===i));el.dataset.index=i};show();if(slides.length>1){el.querySelector(".ad-prev")?.addEventListener("click",e=>{e.preventDefault();i=(i-1+slides.length)%slides.length;show()});el.querySelector(".ad-next")?.addEventListener("click",e=>{e.preventDefault();i=(i+1)%slides.length;show()});dots.forEach((d,n)=>d.addEventListener("click",e=>{e.preventDefault();i=n;show()}));setInterval(()=>{if(!document.hidden){i=(i+1)%slides.length;show()}},4500)}},0);return`<section class="ad-banner" id="${id}" aria-label="Advertisement slider"><div class="ad-track">${ads.map((a,i)=>`<a class="ad-slide ${i===0?'active':''}" href="${esc(a.link||'#')}" target="_blank" rel="noopener"><div class="ad-copy"><span>${esc(a.badge||'FEATURED')}</span><b>${esc(a.title||'ABS DASHBOARD')}</b><small>${esc(a.text||'')}</small></div>${a.image?`<img src="${esc(a.image)}" alt="${esc(a.title||'Advertisement')}">`:''}</a>`).join('')}</div>${ads.length>1?`<button class="ad-prev" aria-label="Previous banner">‹</button><button class="ad-next" aria-label="Next banner">›</button><div class="ad-dots">${ads.map((_,i)=>`<button class="ad-dot ${i===0?'active':''}" aria-label="Banner ${i+1}"></button>`).join('')}</div>`:''}</section>`}
+function loadServerAds(){
+  const now=Date.now();
+  if(state.adsLoading||(state.adsLoaded&&now-state.adsFetchedAt<30000))return;
+  state.adsLoading=true;
+  fetch(`${ABS_PUBLIC_API_BASE}/ads`,{cache:"no-store"})
+    .then(async response=>{
+      if(!response.ok)throw new Error(`Advertisement API returned ${response.status}`);
+      return response.json();
+    })
+    .then(data=>{
+      const next=Array.isArray(data.items)?data.items:[];
+      const changed=JSON.stringify(next)!==JSON.stringify(state.remoteAds||[]);
+      state.remoteAds=next;
+      state.adsLoaded=true;
+      state.adsFetchedAt=Date.now();
+      if(changed&&state.user&&state.tab==="dashboard")renderDashboard();
+    })
+    .catch(err=>{
+      console.error("ABS advertisements load failed:",err);
+      state.remoteAds=[];
+      state.adsLoaded=true;
+      state.adsFetchedAt=Date.now();
+    })
+    .finally(()=>{state.adsLoading=false});
+}
+function renderAds(){
+  loadServerAds();
+  const ads=(state.remoteAds||[]).filter(x=>x.active!==false);
+  if(!ads.length)return "";
+  const id="ad_"+Date.now();
+  setTimeout(()=>{
+    const el=document.getElementById(id);if(!el)return;
+    const slides=[...el.querySelectorAll(".ad-slide")],dots=[...el.querySelectorAll(".ad-dot")];let i=0;
+    const show=()=>{slides.forEach((c,n)=>c.classList.toggle("active",n===i));dots.forEach((d,n)=>d.classList.toggle("active",n===i));el.dataset.index=i};
+    show();
+    if(slides.length>1){
+      el.querySelector(".ad-prev")?.addEventListener("click",e=>{e.preventDefault();i=(i-1+slides.length)%slides.length;show()});
+      el.querySelector(".ad-next")?.addEventListener("click",e=>{e.preventDefault();i=(i+1)%slides.length;show()});
+      dots.forEach((d,n)=>d.addEventListener("click",e=>{e.preventDefault();i=n;show()}));
+      setInterval(()=>{if(!document.hidden&&document.getElementById(id)){i=(i+1)%slides.length;show()}},4500);
+    }
+  },0);
+  return `<section class="ad-banner" id="${id}" aria-label="Advertisement slider"><div class="ad-track">${ads.map((a,i)=>`<a class="ad-slide ${i===0?'active':''}" href="${esc(a.link||'#')}" target="_blank" rel="noopener"><div class="ad-copy"><span>${esc(a.badge||'FEATURED')}</span><b>${esc(a.title||'ABS DASHBOARD')}</b><small>${esc(a.text||'')}</small></div>${a.image?`<img src="${esc(a.image)}" alt="${esc(a.title||'Advertisement')}">`:''}</a>`).join('')}</div>${ads.length>1?`<button class="ad-prev" aria-label="Previous banner">‹</button><button class="ad-next" aria-label="Next banner">›</button><div class="ad-dots">${ads.map((_,i)=>`<button class="ad-dot ${i===0?'active':''}" aria-label="Banner ${i+1}"></button>`).join('')}</div>`:''}</section>`
+}
 const AI_FLOW={
  'Account & Balance':{icon:'◈',desc:'Your money at a glance',qs:['What is my available balance?','How much income do I have?','What are my total savings?','How much do I need to receive?']},
  'Spending':{icon:'↘',desc:'Understand where your money goes',qs:['How much have I spent?','Which expense category is highest?','Show my recent expenses.','What is my average monthly expense?']},
@@ -747,9 +813,16 @@ window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=o
 setup();
 if(firebaseAdminReady()){
   firebase.auth().onAuthStateChanged(async user=>{
-    if(user && user.uid===ABS_ADMIN_UID && !state.user){await restoreFirebaseAdminSession();}
+    if(user && state.user && state.user.uid===user.uid){
+      watchUserProfile(user);
+    }else{
+      stopUserProfileWatch();
+      if(user && user.uid===ABS_ADMIN_UID && !state.user){await restoreFirebaseAdminSession();}
+    }
   });
 }
+// Keep dashboard banners in sync with the central admin API while the page stays open.
+setInterval(()=>{if(!document.hidden&&state.user&&state.tab==="dashboard")loadServerAds()},30000);
 
 /* ABS i18n expansion: Hindi translates the app UI while the top greeting and user name stay English. */
 Object.assign(window.HI_UI || (window.HI_UI = {}),{
