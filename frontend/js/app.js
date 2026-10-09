@@ -170,7 +170,10 @@ async function openAdminPanel(){
     openModal("ABS Admin",`<div class="admin-panel"><div class="admin-hero"><div><div class="eyebrow">ABS CONTROL CENTER</div><h3>Administration</h3><p>Firebase users could not be loaded.</p></div><button class="admin-logout" onclick="state.admin=false;firebase.auth().signOut();closeModal()">LOGOUT</button></div><div class="admin-section"><div class="admin-empty">${esc(err.message||"Unable to load Firebase users.")}<br><br>Check Firestore rules and try again.</div></div><div class="admin-security-note"><b>Local fallback</b><span>${fallback.length} local account record(s) are still stored on this device.</span></div></div>`);
   }
 }
-function adminResetUserPassword(mobile){if(!state.admin)return;openModal("Reset User Password",`<div class="workspace-hero"><div class="workspace-icon">🔒</div><div><div class="eyebrow">ACCOUNT SECURITY</div><h3>Set a new password</h3><p>Password for <b>${esc(mobile)}</b> will be replaced. The existing password is never revealed.</p></div></div><form id="adminResetForm" class="professional-form"><label class="field"><span>New Password</span><div class="field-control"><input id="adminNewPassword" type="password" minlength="6" required placeholder="Minimum 6 characters"></div></label><label class="field"><span>Confirm Password</span><div class="field-control"><input id="adminNewPassword2" type="password" minlength="6" required placeholder="Repeat password"></div></label><button class="primary full">UPDATE PASSWORD</button></form>`);$("#adminResetForm").onsubmit=e=>{e.preventDefault();const a=$("#adminNewPassword").value,b=$("#adminNewPassword2").value;if(a!==b)return toast("Passwords do not match");localStorage.setItem(`abs_password_${mobile}`,a);closeModal();toast("User password updated");openAdminPanel()}}
+function adminResetUserPassword(mobile){
+  if(!state.admin)return;
+  openModal("Secure password reset required",`<div class="workspace-hero"><div class="workspace-icon">🔒</div><div><div class="eyebrow">ACCOUNT SECURITY</div><h3>Cannot reset this password from the browser</h3><p>The account for <b>${esc(mobile)}</b> uses Firebase Authentication. A browser-only password change would not update the real sign-in password. No changes have been made.</p><p class="muted">To enable admin password reset, connect this action to a protected server endpoint using Firebase Admin SDK.</p></div></div><button class="primary full" type="button" onclick="closeModal()">CLOSE</button>`);
+}
 function deleteFeedback(id){if(!state.admin)return;if(!confirm("Delete this feedback?"))return;localStorage.setItem("abs_feedback",JSON.stringify(feedbackList().filter(x=>x.id!==id)));openAdminPanel();toast("Feedback deleted")}
 function setup(){document.body.classList.toggle("light",state.theme==="light");if(state.user){const rec=ensureAbsIds().find(u=>u.mobile===state.user.mobile);if(rec)state.user.absId=rec.absId;const exists=userRegistry().some(u=>u.mobile===state.user.mobile);if(!exists){clearSession();state.user=null;state.data=EMPTY_DATA();}else{ensureData();$("#authScreen").classList.add("hidden");$("#mainApp").classList.remove("hidden");$("#greeting").textContent=greet(state.user.name);render();return}}$("#authScreen").classList.remove("hidden");$("#mainApp").classList.add("hidden")}
 $("#showRegister").onclick=()=>{$("#loginPanel").classList.add("hidden");$("#registerPanel").classList.remove("hidden")};$("#showLogin").onclick=()=>{$("#registerPanel").classList.add("hidden");$("#loginPanel").classList.remove("hidden")};
@@ -419,7 +422,7 @@ $("#loginForm").onsubmit=async e=>{
       $("#authMsg").textContent=
         err.message||
         "Login failed. Please try again.";
-
+    }
   }
 };
 
@@ -513,6 +516,7 @@ function openProfileEdit(){
     toast("Profile update failed. Please try again.");
   }
 };
+}
 function openAboutApp(){
   const screenEl=document.getElementById("screen");
   if(!screenEl)return;
@@ -520,7 +524,33 @@ function openAboutApp(){
   $("#aboutBack").onclick=()=>renderProfile();
   renderFooter();
 }
-function openPassword(){openModal("Change Password",`<div class="profile-edit-hero"><div class="profile-edit-icon">🔒</div><div><div class="eyebrow">ACCOUNT SECURITY</div><h3>Change your password</h3><p>Use a strong password that only you know.</p></div></div><form id="passForm" class="professional-form"><label class="field"><span>Current Password</span><div class="field-control"><input id="oldPass" type="password" autocomplete="current-password" required></div></label><label class="field"><span>New Password</span><div class="field-control"><input id="newPass" type="password" minlength="6" autocomplete="new-password" required></div></label><label class="field"><span>Confirm Password</span><div class="field-control"><input id="newPass2" type="password" minlength="6" autocomplete="new-password" required></div></label><button class="primary full">UPDATE PASSWORD</button></form>`);$("#passForm").onsubmit=e=>{e.preventDefault();if($("#oldPass").value!==localStorage.getItem(`abs_password_${state.user.mobile}`))return toast("Current password is incorrect");if($("#newPass").value!==$("#newPass2").value)return toast("Passwords do not match");localStorage.setItem(`abs_password_${state.user.mobile}`,$("#newPass").value);closeModal();toast("Password changed successfully")}}
+async function reauthenticateCurrentAccount(password){
+  if(!firebaseAdminReady())throw new Error("Firebase is not available. Please refresh and try again.");
+  const authUser=firebase.auth().currentUser;
+  if(!authUser||!state.user?.uid||authUser.uid!==state.user.uid)throw new Error("Your Firebase session has expired. Please log in again.");
+  const email=authUser.email||`${state.user.mobile}@absdashboard.app`;
+  const credential=firebase.auth.EmailAuthProvider.credential(email,password);
+  await authUser.reauthenticateWithCredential(credential);
+  return authUser;
+}
+function authPasswordError(err){
+  if(["auth/wrong-password","auth/invalid-credential","auth/invalid-login-credentials"].includes(err?.code))return "Current password is incorrect.";
+  return err?.message||"The password could not be updated. Please try again.";
+}
+function openPassword(){
+  openModal("Change Password",`<div class="profile-edit-hero"><div class="profile-edit-icon">🔒</div><div><div class="eyebrow">ACCOUNT SECURITY</div><h3>Change your password</h3><p>Use a strong password that only you know.</p></div></div><form id="passForm" class="professional-form"><label class="field"><span>Current Password</span><div class="field-control"><input id="oldPass" type="password" autocomplete="current-password" required></div></label><label class="field"><span>New Password</span><div class="field-control"><input id="newPass" type="password" minlength="6" autocomplete="new-password" required></div></label><label class="field"><span>Confirm Password</span><div class="field-control"><input id="newPass2" type="password" minlength="6" autocomplete="new-password" required></div></label><button class="primary full">UPDATE PASSWORD</button></form>`);
+  $("#passForm").onsubmit=async e=>{
+    e.preventDefault();
+    const oldPassword=$("#oldPass").value,newPassword=$("#newPass").value,confirmPassword=$("#newPass2").value;
+    if(newPassword!==confirmPassword)return toast("Passwords do not match");
+    if(newPassword.length<6)return toast("Password must be at least 6 characters");
+    try{
+      const authUser=await reauthenticateCurrentAccount(oldPassword);
+      await authUser.updatePassword(newPassword);
+      closeModal();toast("Password changed successfully");
+    }catch(err){console.error("Firebase password change failed:",err);toast(authPasswordError(err));}
+  };
+}
 function exportData(){exportPDF()}
 function renderProfile(){
   const screenEl=document.getElementById("screen");
@@ -692,8 +722,25 @@ try{
 }catch(e){}
 
 doc.setFontSize(22);doc.text("ABS STATEMENT",M+58,45);doc.setFont("helvetica","normal");doc.setFontSize(9);doc.text("PERSONAL FINANCE REPORT",M+59,61);doc.setTextColor(...ink);doc.setFontSize(10);doc.text(`Account: ${short(state.user?.name||"User")}`,M,108);doc.text(`Mobile: ${short(state.user?.mobile||"")}`,M,123);doc.text(`Generated: ${new Date().toLocaleString("en-IN")}`,W-M,108,{align:"right"});doc.text(`Period: All recorded activity`,W-M,123,{align:"right"})}function footer(){doc.setDrawColor(220,223,230);doc.line(M,H-42,W-M,H-42);doc.setTextColor(...muted);doc.setFontSize(8);doc.text("ABS DASHBOARD · Confidential personal finance statement",M,H-27);doc.text(`Page ${page}`,W-M,H-27,{align:"right"})}function newPage(){footer();doc.addPage();page++;header()}function card(x,y,w,h,label,value,color){doc.setFillColor(...soft);doc.roundedRect(x,y,w,h,10,10,"F");doc.setTextColor(...muted);doc.setFont("helvetica","bold");doc.setFontSize(8);doc.text(label.toUpperCase(),x+12,y+18);doc.setTextColor(...color);doc.setFontSize(14);doc.text(fmt(value),x+12,y+39)}header();let y=150;doc.setTextColor(...ink);doc.setFont("helvetica","bold");doc.setFontSize(12);doc.text("ACCOUNT OVERVIEW",M,y);y+=14;const gap=10,cw=(W-2*M-gap)/2;card(M,y,cw,54,"Total Income",t.income,green);card(M+cw+gap,y,cw,54,"Total Expenses",t.expense,red);y+=66;card(M,y,cw,54,"Net Savings",t.net,t.net>=0?green:red);card(M+cw+gap,y,cw,54,"EMI Paid",t.emi,accent);y+=66;card(M,y,cw,54,"To Receive",l.receive,green);card(M+cw+gap,y,cw,54,"To Pay",l.pay,red);y+=82;doc.setTextColor(...ink);doc.setFontSize(12);doc.text("MONEY MOVEMENT",M,y);y+=20;doc.setFillColor(...ink);doc.roundedRect(M,y,W-2*M,30,6,6,"F");doc.setTextColor(255,255,255);doc.setFontSize(8);doc.text("CATEGORY",M+12,y+19);doc.text("COUNT",M+230,y+19,{align:"right"});doc.text("AMOUNT",W-M-12,y+19,{align:"right"});y+=30;const overview=[["Income",state.data.income.length,t.income], ["Expenses",state.data.expenses.length,t.expense], ["Loan Principal",state.data.loans.length,t.loan], ["EMI Payments",state.data.emi.length,t.emi], ["Lena / Dena",state.data.ledger.length,state.data.ledger.reduce((s,x)=>s+Number(x.amount||0),0)]];overview.forEach((r,i)=>{if(i%2===0)doc.setFillColor(249,250,252);else doc.setFillColor(255,255,255);doc.rect(M,y,W-2*M,25,"F");doc.setTextColor(...ink);doc.setFont("helvetica","normal");doc.setFontSize(8.5);doc.text(r[0],M+12,y+16);doc.text(String(r[1]),M+230,y+16,{align:"right"});doc.setFont("helvetica","bold");doc.text(fmt(r[2]),W-M-12,y+16,{align:"right"});y+=25});y+=25;doc.setTextColor(...ink);doc.setFont("helvetica","bold");doc.setFontSize(12);doc.text("TRANSACTION DETAIL",M,y);y+=18;const rows=[...state.data.income.map(x=>({...x,type:"INCOME",desc:x.description||x.source||"Income",credit:Number(x.amount||0),debit:0})),...state.data.expenses.map(x=>({...x,type:"EXPENSE",desc:x.description||x.category||"Expense",credit:0,debit:Number(x.amount||0)})),...state.data.emi.map(x=>({...x,type:"EMI",desc:x.remarks||x.loan||"EMI payment",credit:0,debit:Number(x.amount||0)})),...state.data.ledger.map(x=>{const d=x.direction;const credit=["lena","receive"].includes(d)?Number(x.amount||0):0;const debit=["dena","pay"].includes(d)?Number(x.amount||0):0;return {...x,type:"LEDGER",desc:`${x.person||"Person"} · ${x.directionLabel||d||"Ledger"}`,credit,debit}})].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||"")));let balance=0;const drawTableHead=()=>{doc.setFillColor(...ink);doc.roundedRect(M,y,W-2*M,28,5,5,"F");doc.setTextColor(255,255,255);doc.setFont("helvetica","bold");doc.setFontSize(7.5);doc.text("DATE",M+9,y+18);doc.text("TYPE",M+70,y+18);doc.text("DESCRIPTION",M+115,y+18);doc.text("MODE",M+300,y+18);doc.text("CREDIT",M+390,y+18,{align:"right"});doc.text("DEBIT",M+455,y+18,{align:"right"});doc.text("BALANCE",W-M-9,y+18,{align:"right"});y+=28};drawTableHead();rows.forEach((x,idx)=>{if(y>H-75){newPage();y=150;doc.setTextColor(...ink);doc.setFont("helvetica","bold");doc.setFontSize(11);doc.text("TRANSACTION DETAIL · CONTINUED",M,y);y+=14;drawTableHead()}balance+=Number(x.credit||0)-Number(x.debit||0);if(idx%2===0)doc.setFillColor(249,250,252);else doc.setFillColor(255,255,255);doc.rect(M,y,W-2*M,22,"F");doc.setTextColor(...ink);doc.setFont("helvetica","normal");doc.setFontSize(7);doc.text(String(x.date||"").slice(0,10),M+9,y+14);doc.text(short(x.type).slice(0,8),M+70,y+14);doc.text(short(x.desc).slice(0,29),M+115,y+14);doc.text(short(x.mode||"—").slice(0,13),M+300,y+14);if(x.credit)doc.setTextColor(...green);doc.text(x.credit?fmt(x.credit):"—",M+390,y+14,{align:"right"});if(x.debit)doc.setTextColor(...red);doc.text(x.debit?fmt(x.debit):"—",M+455,y+14,{align:"right"});doc.setTextColor(...ink);doc.text(fmt(balance),W-M-9,y+14,{align:"right"});y+=22});if(!rows.length){doc.setTextColor(...muted);doc.setFont("helvetica","normal");doc.setFontSize(9);doc.text("No transactions recorded yet.",M+10,y+18);y+=30}y+=18;if(y>H-110){newPage();y=150}doc.setFillColor(...ink);doc.roundedRect(M,y,W-2*M,58,9,9,"F");doc.setTextColor(255,255,255);doc.setFont("helvetica","bold");doc.setFontSize(10);doc.text("STATEMENT TOTALS",M+14,y+19);doc.setFontSize(8);doc.setFont("helvetica","normal");doc.text(`Income ${fmt(t.income)}   ·   Expenses ${fmt(t.expense)}   ·   EMI ${fmt(t.emi)}`,M+14,y+34);doc.text(`Net Savings ${fmt(t.net)}   ·   To Receive ${fmt(l.receive)}   ·   To Pay ${fmt(l.pay)}`,M+14,y+48);footer();doc.save(`ABS-Statement-${new Date().toISOString().slice(0,10)}.pdf`)}
-function resetFinancialData(){openModal("Smart Fresh",`<div class="danger-zone"><div class="workspace-hero"><div class="workspace-icon">🧹</div><div><div class="eyebrow">PROTECTED RESET</div><h3>Clear financial data</h3><p>This permanently clears income, expenses, loans, EMI, people and ledger records for this account.</p></div></div><form id="freshForm"><label class="field"><span>Account Password</span><div class="field-control"><input id="freshPassword" type="password" required placeholder="Enter your account password"></div></label><label class="field"><span>Type RESET to confirm</span><div class="field-control"><input id="freshConfirm" required placeholder="RESET"></div></label><button class="danger full" type="submit">DELETE FINANCIAL DATA</button></form></div>`);$("#freshForm").onsubmit=e=>{e.preventDefault();if($("#freshPassword").value!==localStorage.getItem(`abs_password_${state.user.mobile}`))return toast("Incorrect password");if($("#freshConfirm").value.trim()!=="RESET")return toast("Type RESET to confirm");state.data=EMPTY_DATA();save();closeModal();render();toast("Financial data reset to zero")}}
-function logout(){clearSession();state.user=null;setup()}
+function resetFinancialData(){
+  openModal("Smart Fresh",`<div class="danger-zone"><div class="workspace-hero"><div class="workspace-icon">🧹</div><div><div class="eyebrow">PROTECTED RESET</div><h3>Clear financial data</h3><p>This permanently clears income, expenses, loans, EMI, people and ledger records for this account.</p></div></div><form id="freshForm"><label class="field"><span>Account Password</span><div class="field-control"><input id="freshPassword" type="password" required autocomplete="current-password" placeholder="Enter your account password"></div></label><label class="field"><span>Type RESET to confirm</span><div class="field-control"><input id="freshConfirm" required placeholder="RESET"></div></label><button class="danger full" type="submit">DELETE FINANCIAL DATA</button></form></div>`);
+  $("#freshForm").onsubmit=async e=>{
+    e.preventDefault();
+    if($("#freshConfirm").value.trim()!=="RESET")return toast("Type RESET to confirm");
+    try{
+      await reauthenticateCurrentAccount($("#freshPassword").value);
+      state.data=EMPTY_DATA();
+      await save();
+      closeModal();render();toast("Financial data reset to zero");
+    }catch(err){console.error("Financial data reset failed:",err);toast(authPasswordError(err));}
+  };
+}
+async function logout(){
+  clearSession();state.user=null;state.data=EMPTY_DATA();state.admin=false;
+  try{if(firebaseAdminReady())await firebase.auth().signOut();}
+  catch(err){console.error("Firebase sign-out failed:",err);}
+  setup();
+}
 function openModal(title,body){$("#modalRoot").innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><h2>${esc(title)}</h2><button class="close" onclick="closeModal()">×</button></div>${body}</div></div>`}
 function closeModal(){$("#modalRoot").innerHTML=""}
 window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=openHistory;window.addCategory=addCategory;window.removeCategory=removeCategory;window.editHistoryEntry=editHistoryEntry;window.exportPDF=exportPDF;window.openFeature=openFeature;window.openEditRecords=openEditRecords;window.closeModal=closeModal;window.renderDashboard=renderDashboard;window.setChartRange=setChartRange;window.openProfileEdit=openProfileEdit;window.openPassword=openPassword;window.toggleTheme=toggleTheme;window.exportData=exportData;window.openAvatarPicker=openAvatarPicker;window.setAvatar=setAvatar;window.logout=logout;window.openPeople=openPeople;window.openPersonForm=openPersonForm;window.openLedger=openLedger;window.openLedgerForm=openLedgerForm;window.processBulkImport=processBulkImport;window.downloadBulkTemplate=downloadBulkTemplate;window.resetFinancialData=resetFinancialData;window.openStatement=openStatement;window.exportStatementPDF=exportStatementPDF;window.requestPremium=requestPremium;window.refreshAppData=refreshAppData;window.goTab=goTab;
