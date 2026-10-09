@@ -121,7 +121,7 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&
 const escAttr=s=>esc(s).replace(/`/g,"&#96;");
 const uid=()=>Date.now()+Math.floor(Math.random()*999);
 function greet(name){const h=new Date().getHours();if(h<12)return`Good Morning, ${name} 👋`;if(h<17)return`Good Afternoon, ${name} 👋`;if(h<21)return`Good Evening, ${name} 👋`;return`Welcome, ${name} 👋`}
-function toast(t){const e=$("#toast");e.textContent=t;e.classList.add("show");setTimeout(()=>e.classList.remove("show"),1900)}
+function toast(t,duration=1900){const e=$("#toast");if(!e)return;e.textContent=t;e.classList.add("show");setTimeout(()=>e.classList.remove("show"),Math.max(1500,Number(duration)||1900))}
 function totals(){const income=state.data.income.reduce((a,x)=>a+Number(x.amount||0),0),expense=state.data.expenses.reduce((a,x)=>a+Number(x.amount||0),0),emi=state.data.emi.reduce((a,x)=>a+Number(x.amount||0),0),loan=state.data.loans.reduce((a,x)=>a+Number(x.principal||0),0);return{income,expense,emi,loan,net:income-expense-emi,rate:income?((income-expense-emi)/income)*100:0}}
 function ledgerSummary(){let receive=0,pay=0;state.data.ledger.forEach(x=>{const a=Number(x.amount||0);if(["lena","receive"].includes(x.direction))receive+=a;if(x.direction==="received")receive-=a;if(["dena","pay"].includes(x.direction))pay+=a;if(x.direction==="paid")pay-=a});return{receive:Math.max(0,receive),pay:Math.max(0,pay),net:receive-pay}}
 function paymentOptions(){return ["UPI","Cash","Bank Transfer","Card","Cheque","Other"]}
@@ -138,8 +138,23 @@ function watchUserProfile(authUser){
   stopUserProfileWatch();
   if(!firebaseAdminReady()||!authUser||!state.user||authUser.uid!==state.user.uid)return;
   userProfileUnsubscribe=firebase.firestore().collection("users").doc(authUser.uid).onSnapshot(doc=>{
-    if(!doc.exists)return;
+    if(!doc.exists){
+      // A cached/offline miss is not proof that the account was deleted.
+      if(doc.metadata?.fromCache)return;
+      // If Admin removed this account, erase this device's account cache too.
+      if(state.user?.uid===authUser.uid){
+        const mobile=state.user.mobile;
+        if(mobile)localStorage.removeItem(`abs_data_${mobile}`);
+        const remaining=userRegistry().filter(x=>x.uid!==authUser.uid&&x.mobile!==mobile);
+        localStorage.setItem("abs_users",JSON.stringify(remaining));
+        toast("Your ABS account was removed by Admin.",5000);
+        logout();
+      }
+      return;
+    }
     const p=doc.data()||{};
+    const oldName=String(state.user?.name||"");
+    const oldAbsId=String(state.user?.absId||"");
     const oldVerified=state.user?.verified===true;
     const oldPremium=state.user?.premium===true;
     state.user={...state.user,name:p.name||state.user.name,absId:p.absId||state.user.absId,verified:p.verified===true,premium:p.premium===true};
@@ -147,7 +162,25 @@ function watchUserProfile(authUser){
     const users=userRegistry();
     const record=users.find(x=>x.uid===authUser.uid||x.mobile===state.user.mobile);
     if(record){record.name=state.user.name;record.absId=state.user.absId||record.absId;record.verified=state.user.verified;record.premium=state.user.premium;record.uid=authUser.uid;localStorage.setItem("abs_users",JSON.stringify(users))}
-    if(state.tab==="profile"&&(oldVerified!==state.user.verified||oldPremium!==state.user.premium))renderProfile();
+
+    // Update the account greeting immediately when Admin changes the display name.
+    const greeting=document.getElementById("greeting");
+    if(greeting && oldName!==state.user.name)greeting.textContent=greet(state.user.name);
+
+    const notice=p.adminNotice;
+    if(notice && notice.id){
+      const seenKey=`abs_admin_notice_seen_${authUser.uid}`;
+      if(localStorage.getItem(seenKey)!==String(notice.id)){
+        localStorage.setItem(seenKey,String(notice.id));
+        const fallback=notice.type==="verification"
+          ? (state.user.verified?"Your ABS account is verified. Blue tick unlocked.":"Your ABS verification status was updated by Admin.")
+          : "Admin updated your ABS account profile.";
+        setTimeout(()=>toast(notice.message||fallback,5000),80);
+      }
+    }
+
+    const profileChanged=oldName!==state.user.name||oldAbsId!==state.user.absId||oldVerified!==state.user.verified||oldPremium!==state.user.premium;
+    if(state.tab==="profile"&&profileChanged)renderProfile();
   },err=>console.error("ABS user profile sync failed:",err));
 }
 function requestPremium(){if(!state.user)return; if(isVerified()){toast("Premium is already unlocked");return} const all=premiumRequests();if(all.some(x=>x.mobile===state.user.mobile&&x.status==="pending")){toast("Premium request is already pending");return}all.unshift({id:uid(),name:state.user.name,mobile:state.user.mobile,status:"pending",createdAt:new Date().toISOString()});localStorage.setItem("abs_premium_requests",JSON.stringify(all));renderProfile();toast("Premium request sent to admin") }
@@ -266,8 +299,9 @@ $("#registerForm").onsubmit=async e=>{
       premium:false
     };
 
+    // Never reuse local financial cache from a previously deleted account with the same mobile.
+    localStorage.removeItem(dataKey());
     state.data=EMPTY_DATA();
-
     ensureData();
 
     persistSession(state.user);
@@ -802,6 +836,7 @@ function resetFinancialData(){
   };
 }
 async function logout(){
+  stopUserProfileWatch();
   clearSession();state.user=null;state.data=EMPTY_DATA();state.admin=false;
   try{if(firebaseAdminReady())await firebase.auth().signOut();}
   catch(err){console.error("Firebase sign-out failed:",err);}
@@ -815,10 +850,21 @@ if(firebaseAdminReady()){
   firebase.auth().onAuthStateChanged(async user=>{
     if(user && state.user && state.user.uid===user.uid){
       watchUserProfile(user);
-    }else{
-      stopUserProfileWatch();
-      if(user && user.uid===ABS_ADMIN_UID && !state.user){await restoreFirebaseAdminSession();}
+      return;
     }
+    stopUserProfileWatch();
+    // Do not trust a remembered browser session when Firebase no longer has that account signed in.
+    if(state.user && (!user || state.user.uid!==user.uid)){
+      const mobile=state.user.mobile;
+      clearSession();
+      if(mobile)localStorage.removeItem(`abs_data_${mobile}`);
+      const remaining=userRegistry().filter(x=>x.uid!==state.user.uid&&x.mobile!==mobile);
+      localStorage.setItem("abs_users",JSON.stringify(remaining));
+      state.user=null;
+      state.data=EMPTY_DATA();
+      setup();
+    }
+    if(user && user.uid===ABS_ADMIN_UID && !state.user){await restoreFirebaseAdminSession();}
   });
 }
 // Keep dashboard banners in sync with the central admin API while the page stays open.
