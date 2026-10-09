@@ -529,6 +529,17 @@ function closeModal(){
   window._adImage = '';
 }
 
+// Bind the login form explicitly. Without this handler, the browser submits
+// the HTML form and reloads the page instead of calling the Render login API.
+const loginForm = $('loginForm');
+if (loginForm && loginForm.dataset.absLoginBound !== '1') {
+  loginForm.dataset.absLoginBound = '1';
+  loginForm.addEventListener('submit', event => {
+    event.preventDefault();
+    login();
+  });
+}
+
 if(adminToken){
   // Restore the Render JWT session; refreshAdmin will validate it with the API.
   showAdmin();
