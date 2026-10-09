@@ -1,19 +1,19 @@
 {
-  "name":"abs-dashboard-backend",
-  "version":"1.0.0",
-  "private":true,
-  "type":"commonjs",
-  "scripts":{
-    "start":"node src/server.js",
-    "dev":"node --watch src/server.js"
+  "name": "abs-dashboard-backend",
+  "version": "1.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
   },
-  "dependencies":{
-    "bcryptjs":"^3.0.2",
-    "better-sqlite3":"^12.2.0",
-    "cors":"^2.8.5",
-    "express":"^5.1.0",
-    "express-rate-limit":"^8.0.1",
-    "firebase-admin":"^13.5.0",
-    "jsonwebtoken":"^9.0.2"
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "better-sqlite3": "^12.2.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.0.1",
+    "firebase-admin": "^13.4.0",
+    "jsonwebtoken": "^9.0.2"
   }
 }
