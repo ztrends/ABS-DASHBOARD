@@ -41,19 +41,19 @@ jobs:
           npx cap add android
           npx cap sync android
 
+     
       - name: Generate ABS Android launcher icon
         run: |
           cd frontend
-          if [ -f assets/abs-logo.png ]; then
-            cp assets/abs-logo.png assets/icon.png
-          elif [ -f assets/abs.logo.png ]; then
-            cp assets/abs.logo.png assets/icon.png
+          if [ -f assets/abs-icon.png ]; then
+            cp assets/abs-icon.png assets/icon.png
           else
-            echo "ERROR: ABS logo file not found in frontend/assets/"
+            echo "ERROR: abs-icon.png not found in frontend/assets/"
             ls -la assets/
             exit 1
           fi
           npx capacitor-assets generate --android
+
 
       - name: Add safe Android back handling
         run: |
