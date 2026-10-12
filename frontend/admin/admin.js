@@ -248,7 +248,20 @@ function openUserManager(uid){
     </div>
   `;
 
+  $('modalBody').insertAdjacentHTML('beforeend', `<hr style="border:0;border-top:1px solid var(--line);margin:18px 0"><h3>Financial summary</h3><div id="userFinancialDetails" class="msg">Loading saved income, expenses, loans and EMI…</div>`);
   $('modal').classList.remove('hidden');
+  loadUserFinancialDetails(uid);
+}
+
+async function loadUserFinancialDetails(uid){
+  const target=$('userFinancialDetails'); if(!target) return;
+  try{
+    const d=await api(`/admin/firebase-users/${encodeURIComponent(uid)}/details`);
+    const s=d.summary||{}; const r=d.records||{};
+    const money=n=>'₹'+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
+    const list=(label,items)=>`<details style="margin:10px 0"><summary>${label} (${items.length})</summary><div style="max-height:220px;overflow:auto">${items.map(x=>`<div class="sub" style="padding:7px 0;border-bottom:1px solid var(--line)">${esc(x.date||x.start||'—')} · ${esc(x.category||x.source||x.name||x.loan||x.directionLabel||'Record')} · ${money(x.amount??x.principal??0)}</div>`).join('')||'<div class="sub">No records saved.</div>'}</div></details>`;
+    target.innerHTML=`<div class="row"><span class="badge">Income ${money(s.income)}</span><span class="badge">Expenses ${money(s.expense)}</span><span class="badge">EMI ${money(s.emi)}</span><span class="badge">Balance ${money(Number(s.income||0)-Number(s.expense||0)-Number(s.emi||0))}</span><span class="badge">Loans ${money(s.loanPrincipal)}</span><span class="badge">To receive ${money(s.toReceive)}</span><span class="badge">To pay ${money(s.toPay)}</span></div>${list('Income',r.income||[])}${list('Expenses',r.expenses||[])}${list('Loans',r.loans||[])}${list('EMI payments',r.emi||[])}${list('Lena / Dena',r.ledger||[])}`;
+  }catch(e){target.textContent=`Unable to load financial data: ${e.message||'request failed'}`;}
 }
 
 async function saveUser(uid){
@@ -361,6 +374,7 @@ function renderAds(){
         <div class="sub">${esc(a.text || '')}</div>
 
         ${a.image ? `<img src="${esc(a.image)}" alt="">` : ''}
+        <div class="sub">Starts: ${esc(formatDate(a.starts_at))} · Ends: ${esc(formatDate(a.ends_at))}</div>
 
         <div class="ad-actions">
           <button class="btn ${a.active ? 'ok' : 'blue'}"
@@ -409,6 +423,11 @@ function openAdModal(id = null){
     <input id="adLink"
       value="${escAttr(a.link || '')}">
 
+    <label>Start time (optional)</label>
+    <input id="adStartsAt" type="datetime-local" value="${escAttr(toLocalDateTime(a.starts_at))}">
+    <label>End time (optional — banner stops after this)</label>
+    <input id="adEndsAt" type="datetime-local" value="${escAttr(toLocalDateTime(a.ends_at))}">
+
     <button class="btn full" style="margin-top:16px"
       onclick="saveAd(${id || 0})">
       SAVE ADVERTISEMENT
@@ -452,7 +471,12 @@ function saveAd(id){
       'Title is required.';
   }
 
+  const startsRaw = $('adStartsAt')?.value || '';
+  const endsRaw = $('adEndsAt')?.value || '';
+  if(startsRaw && endsRaw && new Date(startsRaw) > new Date(endsRaw)) return $('adMsg').textContent = 'End time must be after start time.';
   const body = {
+    starts_at: startsRaw ? new Date(startsRaw).toISOString() : '',
+    ends_at: endsRaw ? new Date(endsRaw).toISOString() : '',
     badge: $('adBadge').value.trim() || 'FEATURED',
     title,
     text: $('adText').value.trim(),
@@ -512,6 +536,8 @@ function renderFeedback(){
     `).join('')
     : '<div class="empty">No feedback yet.</div>';
 }
+
+function toLocalDateTime(v){ if(!v) return ''; const d=new Date(v); if(isNaN(d)) return ''; const pad=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 
 function formatDate(v){
   if(!v) return '—';
