@@ -17,9 +17,13 @@ CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT, abs_id TE
 CREATE TABLE IF NOT EXISTS transactions(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,date TEXT,type TEXT NOT NULL,category TEXT,description TEXT,amount REAL NOT NULL,payment_mode TEXT,person_name TEXT,ledger_direction TEXT,created_at TEXT NOT NULL,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS loans(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,name TEXT NOT NULL,principal REAL DEFAULT 0,interest REAL DEFAULT 0,emi REAL DEFAULT 0,start_date TEXT,end_date TEXT,status TEXT DEFAULT 'Active',created_at TEXT NOT NULL,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS feedback(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,name TEXT,mobile TEXT,type TEXT,rating INTEGER,message TEXT,created_at TEXT NOT NULL,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL);
-CREATE TABLE IF NOT EXISTS ads(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,text TEXT,badge TEXT,image TEXT,link TEXT,active INTEGER DEFAULT 1,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ads(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,text TEXT,badge TEXT,image TEXT,link TEXT,active INTEGER DEFAULT 1,starts_at TEXT,ends_at TEXT,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
 `);
+// Safe migrations for existing Render SQLite databases.
+const adColumns = new Set(db.prepare('PRAGMA table_info(ads)').all().map(c=>c.name));
+if(!adColumns.has('starts_at')) db.exec('ALTER TABLE ads ADD COLUMN starts_at TEXT');
+if(!adColumns.has('ends_at')) db.exec('ALTER TABLE ads ADD COLUMN ends_at TEXT');
 const JWT_SECRET=process.env.JWT_SECRET||'CHANGE_THIS_ABS_SECRET_IN_PRODUCTION';
 const ADMIN_USER=process.env.ADMIN_USER||'riyazalipvt@gmail.com';
 const ADMIN_PASS=process.env.ADMIN_PASS||'Shkriyaz@abs70';
@@ -82,8 +86,8 @@ app.get('/api/loans',auth,(req,res)=>res.json({items:db.prepare('SELECT * FROM l
 app.post('/api/loans',auth,(req,res)=>{const x=req.body||{};if(!x.name)return res.status(400).json({error:'Loan name is required'});const info=db.prepare('INSERT INTO loans(user_id,name,principal,interest,emi,start_date,end_date,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run(req.user.id,x.name,Number(x.principal||0),Number(x.interest||0),Number(x.emi||0),x.start_date||'',x.end_date||'',x.status||'Active',now());res.status(201).json({item:db.prepare('SELECT * FROM loans WHERE id=?').get(info.lastInsertRowid)})});
 app.get('/api/summary',auth,(req,res)=>{const t=db.prepare(`SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) income,COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) expense,COUNT(*) entries FROM transactions WHERE user_id=?`).get(req.user.id);res.json({...t,net:t.income-t.expense})});
 app.post('/api/feedback',auth,(req,res)=>{const x=req.body||{};db.prepare('INSERT INTO feedback(user_id,name,mobile,type,rating,message,created_at) VALUES(?,?,?,?,?,?,?)').run(req.user.id,req.user.name,req.user.mobile,x.type||'Feedback',Number(x.rating||0),x.message||'',now());res.status(201).json({ok:true})});
-app.get('/api/ads',(req,res)=>res.json({items:db.prepare('SELECT id,title,text,badge,image,link FROM ads WHERE active=1 ORDER BY id DESC').all()}));
-app.get('/api/admin/ads',admin,(req,res)=>res.json({items:db.prepare('SELECT id,title,text,badge,image,link,active,created_at FROM ads ORDER BY id DESC').all().map(x=>({...x,active:!!x.active}))}));
+app.get('/api/ads',(req,res)=>{const stamp=now();res.json({items:db.prepare("SELECT id,title,text,badge,image,link,starts_at,ends_at FROM ads WHERE active=1 AND (starts_at IS NULL OR starts_at='' OR starts_at<=?) AND (ends_at IS NULL OR ends_at='' OR ends_at>=?) ORDER BY id DESC").all(stamp,stamp)});});
+app.get('/api/admin/ads',admin,(req,res)=>res.json({items:db.prepare('SELECT id,title,text,badge,image,link,active,starts_at,ends_at,created_at FROM ads ORDER BY id DESC').all().map(x=>({...x,active:!!x.active}))}));
 app.post('/api/admin/login',(req,res)=>{const {username,password}=req.body||{};if(username!==ADMIN_USER||password!==ADMIN_PASS)return res.status(401).json({error:'Invalid admin credentials'});res.json({token:jwt.sign({role:'admin'},JWT_SECRET,{expiresIn:'8h'})})});
 app.get('/api/admin/users',admin,(req,res)=>res.json({items:db.prepare('SELECT id,abs_id,name,mobile,verified,premium,created_at,updated_at FROM users ORDER BY id DESC').all()}));
 app.post('/api/admin/users',admin,(req,res)=>{const {name,mobile,password}=req.body||{};if(!name||!/^[6-9]\d{9}$/.test(String(mobile||''))||String(password||'').length<6)return res.status(400).json({error:'Name, valid 10-digit mobile and 6+ character password are required'});if(db.prepare('SELECT 1 FROM users WHERE mobile=?').get(mobile))return res.status(409).json({error:'Mobile number already registered'});const created=now(),hash=bcrypt.hashSync(password,12),absId=nextAbsId(String(mobile));const info=db.prepare('INSERT INTO users(abs_id,name,mobile,password_hash,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(absId,name,mobile,hash,created,created);res.status(201).json({user:db.prepare('SELECT id,abs_id,name,mobile,verified,premium,created_at,updated_at FROM users WHERE id=?').get(info.lastInsertRowid)});});
@@ -95,6 +99,26 @@ app.get('/api/admin/firebase-users',admin,async(req,res)=>{
     const snap=await sdk.firestore().collection('users').get();
     const items=snap.docs.map(doc=>({uid:doc.id,...doc.data()}));
     res.json({items});
+  }catch(e){publicAdminError(res,e)}
+});
+
+app.get('/api/admin/firebase-users/:uid/details',admin,async(req,res)=>{
+  const uid=String(req.params.uid||'').trim();
+  if(!uid) return res.status(400).json({error:'A Firebase UID is required.'});
+  try{
+    const sdk=getFirebaseAdmin();
+    const userRef=sdk.firestore().collection('users').doc(uid);
+    const [profileSnap,privateSnap]=await Promise.all([userRef.get(),userRef.collection('private').doc('data').get()]);
+    if(!profileSnap.exists) return res.status(404).json({error:'Firebase user profile was not found.'});
+    const profile=profileSnap.data()||{};
+    const data=privateSnap.exists?(privateSnap.data()||{}):{};
+    const income=Array.isArray(data.income)?data.income:[];
+    const expenses=Array.isArray(data.expenses)?data.expenses:[];
+    const emi=Array.isArray(data.emi)?data.emi:[];
+    const loans=Array.isArray(data.loans)?data.loans:[];
+    const ledger=Array.isArray(data.ledger)?data.ledger:[];
+    const sum=arr=>arr.reduce((n,x)=>n+Number(x.amount||0),0);
+    res.json({ok:true,user:{uid,...profile},summary:{income:sum(income),expense:sum(expenses),emi:sum(emi),loanPrincipal:loans.reduce((n,x)=>n+Number(x.principal||0),0),toReceive:ledger.filter(x=>['lena','receive'].includes(x.direction)).reduce((n,x)=>n+Number(x.amount||0),0),toPay:ledger.filter(x=>['dena','pay'].includes(x.direction)).reduce((n,x)=>n+Number(x.amount||0),0),entries:income.length+expenses.length+emi.length+loans.length+ledger.length},records:{income,expenses,emi,loans,ledger}});
   }catch(e){publicAdminError(res,e)}
 });
 
@@ -179,7 +203,7 @@ app.delete('/api/admin/users/:id',admin,(req,res)=>{db.prepare('DELETE FROM user
 app.post('/api/admin/users/:id/reset-password',admin,(req,res)=>{const p=String(req.body?.password||'');if(p.length<6)return res.status(400).json({error:'Password must be at least 6 characters'});db.prepare('UPDATE users SET password_hash=?,updated_at=? WHERE id=?').run(bcrypt.hashSync(p,12),now(),req.params.id);res.json({ok:true})});
 app.get('/api/admin/feedback',admin,(req,res)=>res.json({items:db.prepare('SELECT * FROM feedback ORDER BY id DESC').all()}));
 app.post('/api/admin/ads',admin,(req,res)=>{const x=req.body||{};const info=db.prepare('INSERT INTO ads(title,text,badge,image,link,active,created_at) VALUES(?,?,?,?,?,?,?)').run(x.title||'',x.text||'',x.badge||'FEATURED',x.image||'',x.link||'',x.active===false?0:1,now());res.status(201).json({item:db.prepare('SELECT * FROM ads WHERE id=?').get(info.lastInsertRowid)})});
-app.patch('/api/admin/ads/:id',admin,(req,res)=>{const x=req.body||{};db.prepare('UPDATE ads SET title=COALESCE(?,title),text=COALESCE(?,text),badge=COALESCE(?,badge),image=COALESCE(?,image),link=COALESCE(?,link),active=COALESCE(?,active) WHERE id=?').run(x.title??null,x.text??null,x.badge??null,x.image??null,x.link??null,x.active==null?null:(x.active?1:0),req.params.id);res.json({ok:true})});
+app.patch('/api/admin/ads/:id',admin,(req,res)=>{const x=req.body||{};db.prepare('UPDATE ads SET title=COALESCE(?,title),text=COALESCE(?,text),badge=COALESCE(?,badge),image=COALESCE(?,image),link=COALESCE(?,link),active=COALESCE(?,active),starts_at=COALESCE(?,starts_at),ends_at=COALESCE(?,ends_at) WHERE id=?').run(x.title??null,x.text??null,x.badge??null,x.image??null,x.link??null,x.active==null?null:(x.active?1:0),x.starts_at??null,x.ends_at??null,req.params.id);res.json({ok:true})});
 app.delete('/api/admin/ads/:id',admin,(req,res)=>{db.prepare('DELETE FROM ads WHERE id=?').run(req.params.id);res.json({ok:true})});
 const frontend=path.join(__dirname,'../../frontend');
 app.get('/admin', (req,res)=>res.sendFile(path.join(frontend,'admin','index.html')));
