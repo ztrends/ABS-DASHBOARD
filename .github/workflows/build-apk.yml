@@ -24,7 +24,7 @@ jobs:
           java-version: '21'
 
       - name: Install Capacitor
-        run: cd frontend && npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/assets
+        run: cd frontend && npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/assets @capacitor/browser @capacitor/filesystem @capacitor/share esbuild
 
       - name: Prepare web files
         run: |
@@ -36,6 +36,24 @@ jobs:
           done
           cp manifest.json www/manifest.json 2>/dev/null || true
           cp sw.js www/sw.js 2>/dev/null || true
+          cat > native-plugins-entry.js <<'JS'
+          import { Browser } from '@capacitor/browser';
+          import { Filesystem, Directory } from '@capacitor/filesystem';
+          import { Share } from '@capacitor/share';
+          window.ABSNativePlugins = { Browser, Filesystem, Directory, Share };
+          JS
+          npx esbuild native-plugins-entry.js --bundle --format=iife --platform=browser --outfile=www/native-plugins.js
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('www/index.html')
+          html = p.read_text()
+          # Set an explicit flag only in the packaged APK so native launch shows Login,
+          # while the public website continues showing its landing page.
+          marker = '<script>window.ABS_NATIVE_APP=true;window.ABS_APP_VERSION="1.0.${{ github.run_number }}";</script><script src="native-plugins.js"></script>'
+          if 'window.ABS_NATIVE_APP=true' not in html:
+              html = html.replace('</head>', marker + '\n</head>', 1)
+          p.write_text(html)
+          PY
 
       - name: Initialize Capacitor
         run: |
@@ -45,6 +63,47 @@ jobs:
           npx cap sync android
 
      
+      - name: Set APK version and optional stable signing
+        env:
+          ABS_KEYSTORE_BASE64: ${{ secrets.ABS_KEYSTORE_BASE64 }}
+          ABS_KEYSTORE_PASSWORD: ${{ secrets.ABS_KEYSTORE_PASSWORD }}
+          ABS_KEY_ALIAS: ${{ secrets.ABS_KEY_ALIAS }}
+          ABS_KEY_PASSWORD: ${{ secrets.ABS_KEY_PASSWORD }}
+          ABS_VERSION_CODE: ${{ github.run_number }}
+          ABS_VERSION_NAME: 1.0.${{ github.run_number }}
+        run: |
+          cd frontend
+          python3 - <<'PY'
+          import os, re, base64
+          from pathlib import Path
+          p = Path('android/app/build.gradle')
+          text = p.read_text()
+          version_code = os.environ['ABS_VERSION_CODE']
+          version_name = os.environ['ABS_VERSION_NAME']
+          text, code_n = re.subn(r'versionCode\s+\d+', f'versionCode {version_code}', text, count=1)
+          text, name_n = re.subn(r'versionName\s+["\'][^"\']*["\']', f'versionName "{version_name}"', text, count=1)
+          if code_n != 1 or name_n != 1:
+              raise SystemExit('Could not locate versionCode/versionName in generated Android app/build.gradle')
+          if os.environ.get('ABS_KEYSTORE_BASE64'):
+              required = ['ABS_KEYSTORE_PASSWORD', 'ABS_KEY_ALIAS', 'ABS_KEY_PASSWORD']
+              missing = [name for name in required if not os.environ.get(name)]
+              if missing:
+                  raise SystemExit('Stable signing requires GitHub Actions secrets: ' + ', '.join(missing))
+              key = Path('android/app/abs-release.jks')
+              key.write_bytes(base64.b64decode(os.environ['ABS_KEYSTORE_BASE64'], validate=True))
+              signing = '\n    signingConfigs {\n        absStable {\n            storeFile file("abs-release.jks")\n            storePassword System.getenv("ABS_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ABS_KEY_ALIAS")\n            keyPassword System.getenv("ABS_KEY_PASSWORD")\n        }\n    }\n'
+              text = text.replace('android {', 'android {' + signing, 1)
+              if 'buildTypes {' in text:
+                  text = text.replace('buildTypes {', 'buildTypes {\n        debug { signingConfig signingConfigs.absStable }', 1)
+              else:
+                  pos = text.rfind('}')
+                  text = text[:pos] + '\n    buildTypes { debug { signingConfig signingConfigs.absStable } }\n' + text[pos:]
+              print('Using the configured stable Android keystore.')
+          else:
+              print('::warning::ABS_KEYSTORE_BASE64 is not configured; this APK uses a generated debug signing key and may require reinstall instead of in-place update.')
+          p.write_text(text)
+          PY
+
       - name: Generate ABS Android launcher icon
         run: |
           cd frontend
@@ -96,6 +155,10 @@ jobs:
           PY
 
       - name: Build APK
+        env:
+          ABS_KEYSTORE_PASSWORD: ${{ secrets.ABS_KEYSTORE_PASSWORD }}
+          ABS_KEY_ALIAS: ${{ secrets.ABS_KEY_ALIAS }}
+          ABS_KEY_PASSWORD: ${{ secrets.ABS_KEY_PASSWORD }}
         run: cd frontend/android && chmod +x gradlew && ./gradlew clean assembleDebug
 
       - uses: actions/upload-artifact@v4
