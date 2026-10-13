@@ -2,6 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>
+/* In the installed Capacitor APK, open the login screen directly. Keep the public landing page on the website. */
+(function(){
+  try {
+    if (window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform()) {
+      document.documentElement.classList.add("abs-native-app");
+    }
+  } catch (_) {}
+})();
+</script>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <meta name="theme-color" content="#070b16">
 <meta name="description" content="ABS DASHBOARD — Track. Understand. Manage.">
@@ -30,6 +40,12 @@ window.ABS_FIREBASE_CONFIG = {
 <link rel="icon" type="image/png" href="./assets/abs-icon.png">
 <link rel="apple-touch-icon" href="./assets/abs-icon.png">
 <link rel="manifest" href="./manifest.json">
+
+<style>
+html.abs-native-app #landingScreen { display: none !important; }
+html.abs-native-app #authScreen { display: block !important; }
+html.abs-native-app #mainApp { display: none; }
+</style>
 </head>
 <body>
 <div id="app">
@@ -93,7 +109,7 @@ window.ABS_FIREBASE_CONFIG = {
 </div>
 <div id="toast" class="toast"></div>
 <div id="modalRoot"></div>
-<script src="js/app.js?v=20261013-admin-chat-activity-pdf"></script>
+<script src="js/app.js"></script>
 <script>
 document.querySelectorAll(".bottom-nav .nav-item").forEach(function(btn){
   btn.addEventListener("click", function(){
@@ -113,6 +129,21 @@ document.querySelectorAll(".bottom-nav .nav-item").forEach(function(btn){
 if("serviceWorker" in navigator){
   navigator.serviceWorker.register("sw.js").catch(()=>{});
 }
+</script>
+
+<script>
+(function(){
+  try {
+    if (window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform()) {
+      var landing = document.getElementById("landingScreen");
+      var auth = document.getElementById("authScreen");
+      var app = document.getElementById("mainApp");
+      if (landing) landing.classList.add("hidden");
+      if (auth) auth.classList.remove("hidden");
+      if (app) app.classList.add("hidden");
+    }
+  } catch (_) {}
+})();
 </script>
 </body>
 </html>
