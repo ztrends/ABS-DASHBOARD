@@ -3,10 +3,31 @@ const EMPTY_DATA = () => ({income:[],expenses:[],loans:[],emi:[],people:[],ledge
 function readSession(){try{const raw=localStorage.getItem("abs_user");if(raw)return JSON.parse(raw)}catch(e){};try{const m=document.cookie.match(/(?:^|; )abs_session=([^;]+)/);if(m)return JSON.parse(decodeURIComponent(m[1]))}catch(e){};return null}
 function persistSession(user){localStorage.setItem("abs_user",JSON.stringify(user));document.cookie="abs_session="+encodeURIComponent(JSON.stringify(user))+"; path=/; max-age=31536000; SameSite=Lax"}
 function clearSession(){localStorage.removeItem("abs_user");document.cookie="abs_session=; path=/; max-age=0; SameSite=Lax"}
-const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("abs_theme")||"dark",data:null,admin:false,remoteAds:[],adsLoaded:false,adsLoading:false,adsFetchedAt:0};
+const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("abs_theme")||"dark",data:null,admin:false,remoteAds:[],adsLoaded:false,adsLoading:false,adsFetchedAt:0,aiMode:"chat",tweetFilter:"all",tweets:[],tweetsCursor:"",tweetsHasMore:false,tweetsLoading:false,supportChatTimer:null,tweetsRefreshTimer:null};
 let userProfileUnsubscribe = null;
-let liveChatUnsubscribe = null;
 const ABS_PUBLIC_API_BASE = "https://abs-dashboard-t7up.onrender.com/api";
+const ABS_APP_VERSION = String(window.ABS_APP_VERSION || "1.0.0");
+function isNativeApp(){try{return window.ABS_NATIVE_APP===true||!!(window.Capacitor?.isNativePlatform?.()||location.protocol==="capacitor:"||location.protocol==="ionic:")}catch(e){return window.ABS_NATIVE_APP===true}}
+async function absUserApi(path,options={}){
+  if(!firebaseAdminReady()||!firebase.auth().currentUser||firebase.auth().currentUser.uid!==state.user?.uid)throw new Error("Please sign in again to use this feature.");
+  const token=await firebase.auth().currentUser.getIdToken();
+  const headers={Authorization:`Bearer ${token}`,...(options.headers||{})};
+  let body=options.body;
+  if(body&&typeof body!="string"&&!(body instanceof FormData)){headers["Content-Type"]="application/json";body=JSON.stringify(body)}
+  const response=await fetch(`${ABS_PUBLIC_API_BASE}${path}`,{...options,headers,body,cache:"no-store"});
+  let data={};try{data=await response.json()}catch(e){}
+  if(!response.ok)throw new Error(data.error||`Request failed (${response.status})`);
+  return data;
+}
+async function trackAppActivity(){
+  try{
+    if(!state.user?.uid||!firebaseAdminReady()||firebase.auth().currentUser?.uid!==state.user.uid)return;
+    const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),key=`abs_activity_sent_${state.user.uid}_${day}`;
+    if(localStorage.getItem(key))return;
+    await absUserApi("/activity",{method:"POST",body:{}});
+    localStorage.setItem(key,"1");
+  }catch(err){console.warn("ABS activity tracking unavailable:",err?.message||err)}
+}
 
 // Initialize Firebase once the Firebase compat scripts and config from index.html are available.
 (function initABSFirebase(){
@@ -138,17 +159,6 @@ function stopUserProfileWatch(){if(userProfileUnsubscribe){userProfileUnsubscrib
 function watchUserProfile(authUser){
   stopUserProfileWatch();
   if(!firebaseAdminReady()||!authUser||!state.user||authUser.uid!==state.user.uid)return;
-  // Record one activity event per local calendar day; Firestore rules should allow
-  // the signed-in owner to update their own users/{uid} profile document.
-  try{
-    const dayKey=`abs_activity_recorded_${authUser.uid}_${new Date().toISOString().slice(0,10)}`;
-    if(!localStorage.getItem(dayKey)){
-      localStorage.setItem(dayKey,'1');
-      const activityRef=firebase.firestore().collection("users").doc(authUser.uid);
-      const stamp=new Date().toISOString();
-      activityRef.set({lastActiveAt:stamp,lastLoginAt:stamp,activityLog:firebase.firestore.FieldValue.arrayUnion({date:stamp.slice(0,10),at:stamp,source:'app'})},{merge:true}).catch(err=>console.warn("ABS activity tracking could not be saved:",err));
-    }
-  }catch(activityErr){console.warn("ABS activity tracking skipped:",activityErr)}
   userProfileUnsubscribe=firebase.firestore().collection("users").doc(authUser.uid).onSnapshot(doc=>{
     if(!doc.exists){
       // A cached/offline miss is not proof that the account was deleted.
@@ -239,7 +249,7 @@ function adminResetUserPassword(mobile){
   openModal("Secure password reset required",`<div class="workspace-hero"><div class="workspace-icon">🔒</div><div><div class="eyebrow">ACCOUNT SECURITY</div><h3>Cannot reset this password from the browser</h3><p>The account for <b>${esc(mobile)}</b> uses Firebase Authentication. A browser-only password change would not update the real sign-in password. No changes have been made.</p><p class="muted">To enable admin password reset, connect this action to a protected server endpoint using Firebase Admin SDK.</p></div></div><button class="primary full" type="button" onclick="closeModal()">CLOSE</button>`);
 }
 function deleteFeedback(id){if(!state.admin)return;if(!confirm("Delete this feedback?"))return;localStorage.setItem("abs_feedback",JSON.stringify(feedbackList().filter(x=>x.id!==id)));openAdminPanel();toast("Feedback deleted")}
-function setup(){document.body.classList.toggle("light",state.theme==="light");if(state.user){if(typeof state.user.verified!=="boolean")state.user.verified=false;if(typeof state.user.premium!=="boolean")state.user.premium=false;const rec=ensureAbsIds().find(u=>u.mobile===state.user.mobile);if(rec)state.user.absId=rec.absId;const exists=userRegistry().some(u=>u.mobile===state.user.mobile);if(!exists){clearSession();state.user=null;state.data=EMPTY_DATA();}else{ensureData();$("#landingScreen")?.classList.add("hidden");$("#authScreen").classList.add("hidden");$("#mainApp").classList.remove("hidden");$("#greeting").textContent=greet(state.user.name);render();return}}$("#landingScreen")?.classList.remove("hidden");$("#authScreen").classList.add("hidden");$("#mainApp").classList.add("hidden")}
+function setup(){document.body.classList.toggle("light",state.theme==="light");if(state.user){if(typeof state.user.verified!=="boolean")state.user.verified=false;if(typeof state.user.premium!=="boolean")state.user.premium=false;const rec=ensureAbsIds().find(u=>u.mobile===state.user.mobile);if(rec)state.user.absId=state.user.absId||rec.absId;const exists=userRegistry().some(u=>u.mobile===state.user.mobile);if(!exists){clearSession();state.user=null;state.data=EMPTY_DATA();}else{ensureData();$("#landingScreen")?.classList.add("hidden");$("#authScreen").classList.add("hidden");$("#mainApp").classList.remove("hidden");$("#greeting").textContent=greet(state.user.name);render();trackAppActivity();return}}if(isNativeApp()){$("#landingScreen")?.classList.add("hidden");$("#authScreen").classList.remove("hidden");$("#loginPanel")?.classList.remove("hidden");$("#registerPanel")?.classList.add("hidden")}else{$("#landingScreen")?.classList.remove("hidden");$("#authScreen").classList.add("hidden")};$("#mainApp").classList.add("hidden")} 
 document.getElementById('landingLogin')?.addEventListener('click',()=>{document.getElementById('landingScreen')?.classList.add('hidden');document.getElementById('authScreen')?.classList.remove('hidden');document.getElementById('loginPanel')?.classList.remove('hidden');document.getElementById('registerPanel')?.classList.add('hidden')});
 document.getElementById('landingLoginTop')?.addEventListener('click',()=>document.getElementById('landingLogin')?.click());
 $("#showRegister").onclick=()=>{$("#loginPanel").classList.add("hidden");$("#registerPanel").classList.remove("hidden")};$("#showLogin").onclick=()=>{$("#registerPanel").classList.add("hidden");$("#loginPanel").classList.remove("hidden")};
@@ -623,38 +633,73 @@ function openPassword(){
   };
 }
 function exportData(){exportPDF()}
-
-function checkAppUpdate(){
-  const releaseUrl='https://github.com/ztrends/ABS-DASHBOARD/releases/latest';
-  openModal('ABS App Update',`<div class="profile-edit-hero"><div class="profile-edit-icon">⬆</div><div><div class="eyebrow">APP VERSION</div><h3>Check for the latest version</h3><p>Open the official ABS DASHBOARD release page to see the newest APK and update notes.</p></div></div><a class="primary full" style="display:block;text-align:center;text-decoration:none;padding:14px;border-radius:12px" href="${releaseUrl}" target="_blank" rel="noopener">CHECK LATEST VERSION ↗</a><p class="muted" style="margin-top:12px">Only install updates from the official ABS DASHBOARD GitHub release page.</p>`);
+function compareAppVersions(a,b){const x=String(a||'0').split('.').map(n=>Number(n)||0),y=String(b||'0').split('.').map(n=>Number(n)||0);for(let i=0;i<Math.max(x.length,y.length);i++){const d=(x[i]||0)-(y[i]||0);if(d)return d>0?1:-1}return 0}
+async function openAppUpdate(){
+  openModal('Update',`<div class="abs-update-card"><div class="abs-update-orb">⬆</div><div><div class="eyebrow">ABS DASHBOARD</div><h3>App Update</h3><p class="muted">Checking the latest version uploaded by Admin…</p></div></div><div id="absUpdateStatus" class="abs-update-status">Checking for updates…</div><div id="absUpdateActions"></div>`);
+  const box=$('#absUpdateStatus'),actions=$('#absUpdateActions');
+  try{
+    const r=await fetch(`${ABS_PUBLIC_API_BASE}/app-update?ts=${Date.now()}`,{cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not check for updates.');
+    if(!d.available){box.textContent='No update has been published yet. Please check again later.';return}
+    const newer=compareAppVersions(d.version,ABS_APP_VERSION)>0;
+    box.innerHTML=`<div class="abs-update-version-row"><span>Installed version</span><b>${esc(ABS_APP_VERSION)}</b></div><div class="abs-update-version-row"><span>Latest version</span><b>${esc(d.version||'Available')}</b></div>${d.uploadedAt?`<div class="abs-update-version-row"><span>Uploaded</span><b>${esc(new Date(d.uploadedAt).toLocaleDateString('en-IN'))}</b></div>`:''}<p class="muted" style="margin-top:12px">${esc(d.notes||'No release notes provided.')}</p>`;
+    actions.innerHTML=`<button type="button" id="absDownloadUpdate" class="primary full" style="margin-top:14px">${newer?'Download & Install Update':'Download APK'} <span>↓</span></button><p class="muted" style="font-size:10px;line-height:1.5;margin-top:10px">After download, open the APK from Downloads or the notification and confirm Install. Android does not allow silent updates.</p>`;
+    $('#absDownloadUpdate')?.addEventListener('click',async()=>{
+      const url=`${ABS_PUBLIC_API_BASE}/app-update/download`;
+      try{
+        const browser=window.ABSNativePlugins?.Browser||window.Capacitor?.Plugins?.Browser||window.Capacitor?.registerPlugin?.('Browser');
+        if(isNativeApp()&&browser?.open){await browser.open({url});return}
+        const tab=window.open(url,'_blank','noopener');
+        if(!tab&&isNativeApp())location.href=url;
+        if(!isNativeApp()&&!tab){const a=document.createElement('a');a.href=url;a.download='ABS-DASHBOARD.apk';a.rel='noopener';document.body.appendChild(a);a.click();a.remove()}
+      }catch(err){toast(err.message||'Could not start APK download.',4000)}
+    });
+  }catch(err){box.textContent=err.message||'Could not check for updates. Try again when internet is available.'}
 }
-async function openLiveChat(){
-  if(!state.user?.uid||!firebaseAdminReady())return toast('Please sign in again to use Live Chat.');
-  openModal('Live Chat with Admin',`<div class="eyebrow">ABS SUPPORT</div><h3>How can we help?</h3><p class="muted">Messages are visible to the ABS Admin team. Please do not send passwords or OTPs.</p><div id="userChatMessages" style="display:grid;gap:8px;max-height:42vh;overflow:auto;margin:14px 0"><p class="muted">Loading conversation…</p></div><form id="userChatForm"><textarea id="userChatText" maxlength="1500" required placeholder="Write your message…"></textarea><button class="primary full" style="margin-top:10px">SEND MESSAGE</button></form>`);
-  const uid=state.user.uid, chatRef=firebase.firestore().collection('users').doc(uid).collection('private').doc('adminChat');
-  const draw=data=>{
-    const box=$('userChatMessages');if(!box)return;
-    const messages=Array.isArray(data?.messages)?data.messages:[];
-    box.innerHTML=messages.length?messages.map(m=>`<div style="padding:10px 12px;border-radius:12px;background:${m.from==='admin'?'var(--surface-2,#eaf3ff)':'var(--surface,#f4f6fa)'};color:var(--text,#172033)"><b>${m.from==='admin'?'ABS Admin':'You'}</b><div style="overflow-wrap:anywhere">${esc(m.text||'')}</div><small>${esc(m.createdAt?new Date(m.createdAt).toLocaleString():'')}</small></div>`).join(''):'<p class="muted">No messages yet. Send your first message to Admin.</p>';
-    box.scrollTop=box.scrollHeight;
-  };
-  let unsub=null;
-  try{if(liveChatUnsubscribe){liveChatUnsubscribe();liveChatUnsubscribe=null}unsub=chatRef.onSnapshot(s=>draw(s.exists?s.data():{}),err=>{const box=$('userChatMessages');if(box)box.innerHTML='<p class="muted">Unable to load messages. Please try again later.</p>';console.warn('ABS live chat listener failed',err)})}catch(e){}
-  const form=$('userChatForm');
-  if(form)form.onsubmit=async e=>{
-    e.preventDefault();const input=$('userChatText'),text=input?.value.trim();if(!text)return;
-    const btn=form.querySelector('button');btn.disabled=true;
-    try{
-      const snap=await chatRef.get(),old=snap.exists?(snap.data()||{}):{},messages=Array.isArray(old.messages)?old.messages:[];
-      messages.push({id:`m-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,from:'user',text,createdAt:new Date().toISOString()});
-      await chatRef.set({messages:messages.slice(-200),updatedAt:new Date().toISOString()},{merge:true});
-      input.value='';
-    }catch(err){toast('Message could not be sent. Check your connection and try again.');console.error('ABS live chat send failed',err)}
-    finally{btn.disabled=false}
-  };
-  // Clean up Firestore listener when this modal is closed or replaced.
-  liveChatUnsubscribe=unsub;
+function closeSupportTimer(){if(state.supportChatTimer){clearInterval(state.supportChatTimer);state.supportChatTimer=null}}
+function supportChatDraw(messages){
+  const box=$('#absSupportMessages');if(!box)return;const oldBottom=box.scrollHeight-box.scrollTop-box.clientHeight<60;
+  box.innerHTML=(messages||[]).map(m=>`<div class="abs-chat-row ${m.from==='admin'?'from-admin':'from-user'}"><div class="abs-chat-bubble"><p>${esc(m.text||'')}</p><time>${esc(m.createdAt?new Date(m.createdAt).toLocaleString('en-IN',{dateStyle:'short',timeStyle:'short'}):'')}</time></div></div>`).join('')||`<div class="abs-chat-empty"><span>💬</span><b>Start your support conversation</b><p>Send a message to ABS Admin. Your message history stays here.</p></div>`;
+  if(oldBottom||!box.dataset.firstRender){box.scrollTop=box.scrollHeight;box.dataset.firstRender='1'}
 }
+async function refreshUserSupportChat(){try{const d=await absUserApi('/support-chat');supportChatDraw(d.messages||[])}catch(err){const box=$('#absSupportMessages');if(box&&box.dataset.firstRender!=='1')box.innerHTML=`<div class="abs-chat-empty"><b>Unable to load chat</b><p>${esc(err.message||'Please sign in again and retry.')}</p></div>`}}
+function openSupportChat(){
+  closeSupportTimer();
+  openModal('Support Chat',`<div class="abs-support-chat"><div class="abs-chat-secure"><span class="abs-chat-online-dot"></span><div><b>ABS Support</b><small>Conversation saved · Replies appear here</small></div></div><div id="absSupportMessages" class="abs-support-messages"><div class="abs-chat-empty">Loading conversation…</div></div><form id="absSupportForm" class="abs-chat-compose"><textarea id="absSupportText" maxlength="1500" rows="2" required placeholder="Message ABS Admin…"></textarea><button type="submit" aria-label="Send message">➤</button></form></div>`);
+  refreshUserSupportChat();state.supportChatTimer=setInterval(()=>{if($('#absSupportMessages'))refreshUserSupportChat();else closeSupportTimer()},2200);
+  $('#absSupportForm')?.addEventListener('submit',async e=>{e.preventDefault();const input=$('#absSupportText'),text=input?.value.trim();if(!text)return;const btn=e.submitter||e.currentTarget.querySelector('button');if(btn)btn.disabled=true;try{await absUserApi('/support-chat',{method:'POST',body:{text}});input.value='';await refreshUserSupportChat()}catch(err){toast(err.message||'Message was not sent. Try again.',3500)}finally{if(btn)btn.disabled=false}});
+}
+function shareTweet(tweet){const text=`${tweet.absId||'ABS USER'}${tweet.verified?' ✓':''}\n${tweet.text||''}`;const shareOptions={title:'ABS DASHBOARD Tweet',text,url:location.origin,dialogTitle:'Share ABS Tweet'};const nativeShare=window.ABSNativePlugins?.Share;if(nativeShare?.share){nativeShare.share(shareOptions).catch(()=>{});return}if(navigator.share){navigator.share(shareOptions).catch(()=>{});return}if(navigator.clipboard?.writeText){navigator.clipboard.writeText(`${text}\n${location.origin}`).then(()=>toast('Tweet copied. Share it on WhatsApp, Instagram or another app.')).catch(()=>window.prompt('Copy your tweet',text));return}window.prompt('Copy your tweet to share',text)}
+function tweetCardHTML(t){const id=escAttr(t.id);const date=t.createdAt?new Date(t.createdAt).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'';return `<article class="abs-tweet-card" data-tweet-id="${id}"><div class="abs-tweet-head"><div class="abs-tweet-avatar">${esc(String(t.absId||'ABS').slice(0,1))}</div><div class="abs-tweet-author"><b>${esc(t.absId||'ABS USER')}${t.verified?'<span class="abs-tweet-verified" title="Verified">✓</span>':''}</b><small>${esc(date)}</small></div>${t.isMine?`<button type="button" class="abs-tweet-delete" data-delete-tweet="${id}" aria-label="Delete your tweet">Delete</button>`:''}</div><p class="abs-tweet-text">${esc(t.text||'')}</p><div class="abs-tweet-actions"><button type="button" data-share-tweet="${id}">↗ Share</button><span>Public Tweet</span></div></article>`}
+async function fetchTweetsPage(older=false,silent=false){
+  if(state.tweetsLoading)return;state.tweetsLoading=true;
+  const list=$('#absTweetsList');if(!silent&&list&&!older)list.innerHTML='<div class="abs-chat-empty">Loading Tweets…</div>';
+  try{
+    const q=older&&state.tweetsCursor?`?before=${encodeURIComponent(state.tweetsCursor)}`:'';const d=await absUserApi('/tweets'+q);const got=Array.isArray(d.items)?d.items:[];
+    if(older){const have=new Set((state.tweets||[]).map(x=>x.id));state.tweets=[...(state.tweets||[]),...got.filter(x=>!have.has(x.id))]}else{const keep=(state.tweets||[]).filter(old=>!got.some(n=>n.id===old.id)&&Number(old.createdAtMs||0)<Math.min(...got.map(n=>Number(n.createdAtMs||0)),Infinity));state.tweets=[...got,...keep]}
+    state.tweetsCursor=d.nextCursor||state.tweetsCursor;state.tweetsHasMore=!!d.hasMore;renderTweetCards();
+  }catch(err){if(list&&!silent)list.innerHTML=`<div class="abs-chat-empty"><b>Could not load Tweets</b><p>${esc(err.message||'Check your connection.')}</p><button class="primary" id="absRetryTweets">Try again</button></div>`;$('#absRetryTweets')?.addEventListener('click',()=>fetchTweetsPage(false,false))}
+  finally{state.tweetsLoading=false}
+}
+function renderTweetCards(){
+  const list=$('#absTweetsList');if(!list)return;const rows=(state.tweets||[]).filter(t=>state.tweetFilter!=='mine'||t.isMine);
+  list.innerHTML=rows.map(tweetCardHTML).join('')||`<div class="abs-chat-empty"><span>𝕏</span><b>${state.tweetFilter==='mine'?'You have not posted yet':'No Tweets yet'}</b><p>Share a useful update with the ABS community.</p></div>`;
+  const load=$('#absLoadMoreTweets');if(load){load.hidden=!state.tweetsHasMore;load.disabled=state.tweetsLoading;load.textContent=state.tweetsLoading?'Loading…':'Load older Tweets'}
+  $('#absTweetCount')?.replaceChildren(document.createTextNode(`${rows.length} ${rows.length===1?'tweet':'tweets'}`));
+  list.querySelectorAll('[data-delete-tweet]').forEach(btn=>btn.addEventListener('click',async()=>{if(!confirm('Delete this Tweet permanently?'))return;btn.disabled=true;try{await absUserApi(`/tweets/${encodeURIComponent(btn.dataset.deleteTweet)}`,{method:'DELETE'});state.tweets=state.tweets.filter(t=>t.id!==btn.dataset.deleteTweet);renderTweetCards();toast('Tweet deleted.')}catch(err){toast(err.message||'Could not delete Tweet.')}finally{btn.disabled=false}}));
+  list.querySelectorAll('[data-share-tweet]').forEach(btn=>btn.addEventListener('click',()=>{const t=state.tweets.find(x=>x.id===btn.dataset.shareTweet);if(t)shareTweet(t)}));
+}
+function renderTweetsHome(){
+  document.body.classList.add('ai-open');
+  $('#screen').innerHTML=`<div class="ai-fullscreen abs-tweets-fullscreen"><header class="ai-new-head"><button type="button" class="ai-close" id="tweetBack">‹</button><div class="ai-brand-mark">𝕏</div><div class="ai-head-copy"><b>ABS SOCIAL</b><small>Community Tweets</small></div><button type="button" class="abs-switch-ai" id="tweetsToAI">✦ AI Chat</button></header><main class="ai-new-body abs-tweets-body"><div class="abs-social-hero"><div><div class="eyebrow">PUBLIC TIMELINE</div><h1>ABS Tweets</h1><p>Share an update with the ABS community. Posts stay here until Admin removes them.</p></div><span class="abs-social-orb">𝕏</span></div><div class="abs-tweet-tabs"><button type="button" data-tweet-filter="all" class="${state.tweetFilter==='all'?'active':''}">All Tweets</button><button type="button" data-tweet-filter="mine" class="${state.tweetFilter==='mine'?'active':''}">My Tweets</button><span id="absTweetCount">0 tweets</span></div><form id="absTweetForm" class="abs-tweet-compose"><label for="absTweetText">Write a Tweet <small id="absTweetChars">0/280</small></label><textarea id="absTweetText" rows="3" maxlength="280" placeholder="What's happening?" required></textarea><div><span>Posted with your ABS ID only</span><button type="submit" id="absPostTweet">Post Tweet ↗</button></div></form><div id="absTweetsList" class="abs-tweets-list"><div class="abs-chat-empty">Loading Tweets…</div></div><button type="button" id="absLoadMoreTweets" class="abs-load-more" hidden>Load older Tweets</button></main></div>`;
+  $('#tweetBack')?.addEventListener('click',()=>{state.aiMode='chat';goTab('dashboard')});$('#tweetsToAI')?.addEventListener('click',()=>{state.aiMode='chat';renderAI()});
+  document.querySelectorAll('[data-tweet-filter]').forEach(b=>b.addEventListener('click',()=>{state.tweetFilter=b.dataset.tweetFilter;document.querySelectorAll('[data-tweet-filter]').forEach(x=>x.classList.toggle('active',x===b));renderTweetCards()}));
+  const text=$('#absTweetText'),chars=$('#absTweetChars');text?.addEventListener('input',()=>{if(chars)chars.textContent=`${text.value.length}/280`});
+  $('#absTweetForm')?.addEventListener('submit',async e=>{e.preventDefault();const input=$('#absTweetText'),content=input?.value.trim();if(!content)return;const btn=$('#absPostTweet');btn.disabled=true;btn.textContent='Posting…';try{const d=await absUserApi('/tweets',{method:'POST',body:{text:content}});state.tweets=[d.item,...(state.tweets||[]).filter(t=>t.id!==d.item.id)];state.tweetFilter='all';document.querySelectorAll('[data-tweet-filter]').forEach(b=>b.classList.toggle('active',b.dataset.tweetFilter==='all'));input.value='';if(chars)chars.textContent='0/280';renderTweetCards();toast('Tweet posted to the ABS community.')}catch(err){toast(err.message||'Could not post Tweet.',3500)}finally{btn.disabled=false;btn.textContent='Post Tweet ↗'}});
+  $('#absLoadMoreTweets')?.addEventListener('click',()=>fetchTweetsPage(true));
+  closeTweetTimer();fetchTweetsPage(false,false);state.tweetsRefreshTimer=setInterval(()=>{if(state.tab==='ai'&&state.aiMode==='tweets')fetchTweetsPage(false,true);else closeTweetTimer()},6500);
+}
+function closeTweetTimer(){if(state.tweetsRefreshTimer){clearInterval(state.tweetsRefreshTimer);state.tweetsRefreshTimer=null}}
+function openMyTweets(){state.aiMode='tweets';state.tweetFilter='mine';goTab('ai')}
 
 function renderProfile(){
   const screenEl=document.getElementById("screen");
@@ -670,13 +715,14 @@ function renderProfile(){
       <section class="profile-premium profile-identity-row"><div class="profile-avatar">${avatar?`<img src="${esc(avatar)}" alt="Profile">`:esc(emoji)}</div><div class="profile-identity"><div class="profile-name">${esc(state.user.name)} ${verified?'<span class="verified-badge" aria-label="Verified"><svg viewBox="0 0 24 24"><path d="M7 12.5l3.1 3.1L17.5 8.5"/></svg></span>':''}</div><div class="profile-mobile">${esc(currentUserRecord()?.absId||state.user.absId||"")}</div></div><button type="button" class="profile-edit-inline" id="profileEditBtn" onclick="openProfileEdit(); return false;">Edit Profile <span>›</span></button></section>
       ${premiumCard}
       <div class="menu">
-        <button type="button" onclick="openPassword()"><span>🔒 Change Password</span><span>›</span></button>
-        <button type="button" data-profile-action="theme"><span>◐ Theme</span><span>${esc(state.theme)}</span></button>
-        <button type="button" data-profile-action="export"><span>⇩ Export My Data</span><span>›</span></button>
-        <button type="button" data-profile-action="update"><span>⬆ Update App<small>Check the latest ABS version</small></span><span>›</span></button>
-        <button type="button" data-profile-action="livechat"><span>✉ Live Chat with Admin<small>Message the ABS support team</small></span><span>›</span></button>
-        <button type="button" class="about-app-option" onclick="openAboutApp()"><span><b>About App</b><small>Learn more about ABS Dashboard</small></span><span>›</span></button>
-        <button type="button" class="danger" data-profile-action="logout"><span>Logout</span><span>→</span></button>
+        <button type="button" data-profile-action="update"><span class="profile-option-label"><i class="profile-option-icon">⬆</i><span><b>Update</b><small>Check and install the latest APK</small></span></span><span>›</span></button>
+        <button type="button" data-profile-action="support"><span class="profile-option-label"><i class="profile-option-icon">💬</i><span><b>Support Chat</b><small>Chat with ABS Admin</small></span></span><span>›</span></button>
+        <button type="button" data-profile-action="tweets"><span class="profile-option-label"><i class="profile-option-icon">𝕏</i><span><b>Tweets</b><small>View the community and manage your posts</small></span></span><span>›</span></button>
+        <button type="button" data-profile-action="password"><span class="profile-option-label"><i class="profile-option-icon">🔒</i><span><b>Change Password</b><small>Keep your account secure</small></span></span><span>›</span></button>
+        <button type="button" data-profile-action="theme"><span class="profile-option-label"><i class="profile-option-icon">◐</i><span><b>Theme</b><small>Change appearance</small></span></span><span>${esc(state.theme)}</span></button>
+        <button type="button" data-profile-action="export"><span class="profile-option-label"><i class="profile-option-icon">⇩</i><span><b>Export My Data</b><small>Download your financial statement</small></span></span><span>›</span></button>
+        <button type="button" class="about-app-option" data-profile-action="about"><span class="profile-option-label"><i class="profile-option-icon">ⓘ</i><span><b>About App</b><small>Learn more about ABS Dashboard</small></span></span><span>›</span></button>
+        <button type="button" class="danger" data-profile-action="logout"><span class="profile-option-label"><i class="profile-option-icon">↪</i><span><b>Logout</b><small>Sign out from this device</small></span></span><span>›</span></button>
       </div>`; screenEl.querySelectorAll('[data-profile-action]').forEach(btn=>btn.addEventListener('click',()=>{
       const a=btn.dataset.profileAction;
       if(a==='edit')openProfileEdit();
@@ -687,8 +733,9 @@ function renderProfile(){
       else if(a==='avatar')openAvatarPicker();
       else if(a==='premium')requestPremium();
       else if(a==='about')openAboutApp();
-      else if(a==='update')checkAppUpdate();
-      else if(a==='livechat')openLiveChat();
+      else if(a==='update')openAppUpdate();
+      else if(a==='support')openSupportChat();
+      else if(a==='tweets')openMyTweets();
     }));
   }catch(err){
     console.error("ABS profile render error",err);
@@ -769,39 +816,25 @@ function openStatement(){
 }
 async function downloadPdfDocument(doc, filename){
   try{
-    const blob=doc.output('blob');
-    if(!blob||!blob.size)throw new Error('PDF file is empty.');
-    const url=URL.createObjectURL(blob);
-    const isMobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||document.body.classList.contains('capacitor');
-    // Mobile webviews often ignore the download attribute; open the PDF in the system/browser viewer.
-    if(isMobile){
-      const file=new File([blob],filename,{type:'application/pdf'});
-      if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
-        try{await navigator.share({files:[file],title:'ABS Statement',text:'Your ABS DASHBOARD statement PDF'});toast('Choose a save or share destination for your PDF.')}
-        catch(shareErr){if(shareErr?.name!=='AbortError')throw shareErr}
-      }else{
-        const opened=window.open(url,'_blank');
-        if(!opened){
-          const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';a.download=filename;
-          document.body.appendChild(a);a.click();a.remove();
-        }
-        toast('PDF opened. Use the viewer menu to Download or Save.');
+    const blob=doc.output('blob');if(!blob||!blob.size)throw new Error('PDF file is empty.');
+    if(isNativeApp()){
+      const plugins=window.ABSNativePlugins||window.Capacitor?.Plugins||{},fs=plugins.Filesystem||window.Capacitor?.registerPlugin?.('Filesystem'),share=plugins.Share||window.Capacitor?.registerPlugin?.('Share');
+      if(fs?.writeFile&&share?.share){
+        const uriData=doc.output('datauristring'),base64=uriData.slice(uriData.indexOf(',')+1);
+        const saved=await fs.writeFile({path:filename,data:base64,directory:'CACHE',recursive:true});
+        await share.share({title:'ABS Statement PDF',text:'Your ABS DASHBOARD financial statement. Use the share menu to save it to Downloads or Drive.',url:saved.uri,dialogTitle:'Save ABS Statement'});
+        toast('PDF ready. Choose Save, Drive or another destination in the share menu.',4500);return;
       }
-    }else{
-      const a=document.createElement('a');a.href=url;a.download=filename;a.style.display='none';
-      document.body.appendChild(a);a.click();a.remove();
-      toast('Statement PDF generated. Check your Downloads folder.');
     }
-    setTimeout(()=>URL.revokeObjectURL(url),120000);
-  }catch(err){
-    console.error('ABS PDF download failed:',err);
-    try{
-      const dataUrl=doc.output('datauristring');
-      const opened=window.open(dataUrl,'_blank','noopener');
-      if(opened)toast('PDF opened. Use the viewer menu to save it.');
-      else toast('PDF was created but the browser blocked opening it. Allow pop-ups and retry.');
-    }catch(fallbackErr){toast('PDF download failed. Please retry from Chrome or your browser menu.')}
-  }
+    const url=URL.createObjectURL(blob);
+    if(navigator.share&&navigator.canShare){
+      try{const file=new File([blob],filename,{type:'application/pdf'});if(navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'ABS Statement PDF',text:'ABS DASHBOARD statement'});toast('PDF ready to save or share.');setTimeout(()=>URL.revokeObjectURL(url),120000);return}}catch(shareErr){if(shareErr?.name==='AbortError'){setTimeout(()=>URL.revokeObjectURL(url),120000);return}}
+    }
+    const a=document.createElement('a');a.href=url;a.download=filename;a.style.display='none';document.body.appendChild(a);a.click();a.remove();
+    // Open the generated PDF as a fallback in mobile browsers which ignore the download attribute.
+    if(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)&&document.visibilityState==='visible')setTimeout(()=>{const w=window.open(url,'_blank','noopener');if(!w)toast('If download did not start, open the PDF from the browser menu.',4000)},250);
+    setTimeout(()=>URL.revokeObjectURL(url),120000);toast('Statement PDF generated. Check Downloads or choose Save from the PDF viewer.',4000);
+  }catch(err){console.error('ABS PDF download failed:',err);toast(`PDF download failed: ${err.message||'Please try again.'}`,4500)}
 }
 function exportStatementPDF(filter='all',from='',to=''){
  if(!window.jspdf?.jsPDF)return toast('PDF engine is loading — try again');
@@ -894,7 +927,7 @@ function aiAnswerText(q){const t=totals(),l=ledgerSummary(),m=currentMonthTotals
 function aiTopicAnswer(){return'I checked your saved ABS Dashboard records. Choose a question below and I’ll calculate the answer from your actual data.'}
 function aiNextOptions(q){if(AI_FLOW[q])return AI_FLOW[q].qs.slice(0,3);for(const x of Object.values(AI_FLOW))if(x.qs.includes(q))return x.qs.filter(v=>v!==q).slice(0,3);return AI_FLOW['Account & Balance'].qs.slice(0,3)}
 function aiFreeText(text){const q=text.trim().toLowerCase();if(!q)return "Please type a question.";if(q.includes("expense")||q.includes("spent"))return aiAnswerText(q.includes("this month")?"__monthExpense":"How much have I spent?");if(q.includes("income")||q.includes("earning"))return aiAnswerText(q.includes("this month")?"__monthIncome":"How much income do I have?");if(q.includes("saving"))return aiAnswerText(q.includes("this month")?"__monthSaving":"What are my total savings?");if(q.includes("balance")||q.includes("available"))return aiAnswerText("__balance");if(q.includes("loan"))return aiAnswerText("__loans");if(q.includes("emi"))return aiAnswerText("How much EMI have I paid?");if(q.includes("receive")||q.includes("lena"))return aiAnswerText("How much do I need to receive?");if(q.includes("pay")||q.includes("dena"))return aiAnswerText("How much do I need to pay?");if(q.includes("statement"))return aiAnswerText("How do I download my statement?");if(q.includes("add expense"))return aiAnswerText("How do I add an expense?");if(q.includes("add income"))return aiAnswerText("How do I add income?");return "I checked your saved ABS Dashboard data. Try asking about this month's expense, income, saving, balance, loans, EMI, Lena / Dena or statement."}
-function renderAI(){document.body.classList.add('ai-open');state.aiHistory=state.aiHistory||[];const history=state.aiHistory;const monthLabel=currentMonthTotals().label;const homeButtons=AI_HOME.map(x=>`<button type="button" class="ai-home-option" data-ai-key="${x.key}"><span class="ai-option-icon">${x.icon}</span><span><b>${esc(x.title)}</b><small>${esc(x.desc)}</small></span><i>›</i></button>`).join('');const moreButtons=Object.entries(AI_FLOW).map(([name,v])=>`<button type="button" class="ai-more-option" data-ai-topic="${escAttr(name)}"><span class="ai-option-icon">${v.icon}</span><span><b>${esc(name)}</b><small>${esc(v.desc)}</small></span><i>›</i></button>`).join('');const historyHtml=history.map(m=>`<div class="ai-chat-row user-row"><div class="ai-user-bubble"><span>${esc(m.qTitle||m.q)}</span><time>${esc(m.time||'')}</time></div></div><div class="ai-chat-row bot-row"><div class="ai-bot-bubble"><div class="ai-bot-head"><span class="ai-bot-orb">✦</span><div><b>ABS AI</b><small>Verified account analysis</small></div></div><p>${esc(m.a).replace(/\n/g,'<br>')}</p><time>${esc(m.time||'')}</time></div></div>`).join('');const follow=history.length?aiNextOptions(history[history.length-1].q).map(q=>`<button type="button" class="ai-suggest-btn" data-ai-question="${escAttr(q)}">${esc(q)} <span>›</span></button>`).join(''):'';const initial=`<section class="ai-home-panel"><div class="ai-home-brand"><div class="ai-home-orb">✦</div><div><div class="eyebrow">ABS DASHBOARD AI</div><h1>Personal Finance Copilot</h1><p>I analyse your saved account data and explain it simply.</p></div></div><div class="ai-section-title">QUICK INSIGHTS · ${esc(monthLabel)}</div><div class="ai-home-options">${homeButtons}</div><button type="button" class="ai-more-toggle" id="aiMoreBtn">＋ MORE SERVICES</button><div id="aiMorePanel" class="ai-more-panel hidden">${moreButtons}</div></section>`;const chat=historyHtml+(history.length?`<div class="ai-suggestions"><div class="ai-section-title">SUGGESTED NEXT</div>${follow}</div>`:'');const shell=`<div class="ai-fullscreen"><header class="ai-new-head"><button type="button" class="ai-close" id="aiBack">‹</button><div class="ai-brand-mark">✦</div><div class="ai-head-copy"><b>ABS AI</b><small>Personal Finance Copilot</small></div><button type="button" class="ai-reset" id="aiReset">↻</button></header><main class="ai-new-body">${initial}<section class="ai-chat-thread">${chat}</section><button type="button" class="ai-new-topic" id="aiNewTopic">＋ NEW TOPIC</button></main><div class="ai-chat-composer"><input id="aiChatInput" placeholder="Ask ABS AI anything about your finances..." autocomplete="off"><button type="button" id="aiSend">↑</button></div></div>`;$('#screen').innerHTML=shell;const ask=(q,title=q)=>{const now=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});state.aiHistory.push({q,a:aiAnswerText(q),qTitle:title,time:now});renderAI();setTimeout(()=>document.querySelector('.ai-chat-composer input')?.focus(),50)};document.getElementById('aiBack')?.addEventListener('click',()=>{state.tab='dashboard';render()});document.getElementById('aiReset')?.addEventListener('click',()=>{state.aiHistory=[];renderAI()});document.querySelectorAll('[data-ai-key]').forEach(b=>b.addEventListener('click',()=>{const item=AI_HOME.find(x=>x.key===b.dataset.aiKey);ask('__'+b.dataset.aiKey,item?.title||b.dataset.aiKey)}));document.querySelectorAll('[data-ai-topic]').forEach(b=>b.addEventListener('click',()=>{const topic=b.dataset.aiTopic;const now=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});state.aiHistory.push({q:topic,a:aiTopicAnswer(topic),qTitle:topic,time:now});renderAI()}));document.querySelectorAll('[data-ai-question]').forEach(b=>b.addEventListener('click',()=>ask(b.dataset.aiQuestion)));const more=document.getElementById('aiMoreBtn');more?.addEventListener('click',()=>document.getElementById('aiMorePanel')?.classList.toggle('hidden'));document.getElementById('aiNewTopic')?.addEventListener('click',()=>{state.aiHistory=[];renderAI()});const input=document.getElementById('aiChatInput'),send=document.getElementById('aiSend');const sendChat=()=>{const text=input?.value.trim();if(!text)return;const now=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});state.aiHistory.push({q:text,a:aiFreeText(text),qTitle:text,time:now});renderAI();setTimeout(()=>document.querySelector('.ai-chat-composer input')?.focus(),50)};send?.addEventListener('click',sendChat);input?.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat()})}
+function renderAI(){document.body.classList.add('ai-open');if(state.aiMode==='tweets'){renderTweetsHome();return}closeTweetTimer();state.aiHistory=state.aiHistory||[];const history=state.aiHistory;const monthLabel=currentMonthTotals().label;const homeButtons=AI_HOME.map(x=>`<button type="button" class="ai-home-option" data-ai-key="${x.key}"><span class="ai-option-icon">${x.icon}</span><span><b>${esc(x.title)}</b><small>${esc(x.desc)}</small></span><i>›</i></button>`).join('');const moreButtons=Object.entries(AI_FLOW).map(([name,v])=>`<button type="button" class="ai-more-option" data-ai-topic="${escAttr(name)}"><span class="ai-option-icon">${v.icon}</span><span><b>${esc(name)}</b><small>${esc(v.desc)}</small></span><i>›</i></button>`).join('');const historyHtml=history.map(m=>`<div class="ai-chat-row user-row"><div class="ai-user-bubble"><span>${esc(m.qTitle||m.q)}</span><time>${esc(m.time||'')}</time></div></div><div class="ai-chat-row bot-row"><div class="ai-bot-bubble"><div class="ai-bot-head"><span class="ai-bot-orb">✦</span><div><b>ABS AI</b><small>Verified account analysis</small></div></div><p>${esc(m.a).replace(/\n/g,'<br>')}</p><time>${esc(m.time||'')}</time></div></div>`).join('');const follow=history.length?aiNextOptions(history[history.length-1].q).map(q=>`<button type="button" class="ai-suggest-btn" data-ai-question="${escAttr(q)}">${esc(q)} <span>›</span></button>`).join(''):'';const initial=`<section class="ai-home-panel"><div class="ai-home-brand"><div class="ai-home-orb">✦</div><div><div class="eyebrow">ABS DASHBOARD AI</div><h1>Personal Finance Copilot</h1><p>I analyse your saved account data and explain it simply.</p></div></div><div class="ai-section-title">QUICK INSIGHTS · ${esc(monthLabel)}</div><div class="ai-home-options">${homeButtons}</div><button type="button" class="ai-more-toggle" id="aiMoreBtn">＋ MORE SERVICES</button><div id="aiMorePanel" class="ai-more-panel hidden">${moreButtons}</div></section>`;const chat=historyHtml+(history.length?`<div class="ai-suggestions"><div class="ai-section-title">SUGGESTED NEXT</div>${follow}</div>`:'');const shell=`<div class="ai-fullscreen"><header class="ai-new-head"><button type="button" class="ai-close" id="aiBack">‹</button><div class="ai-brand-mark">✦</div><div class="ai-head-copy"><b>ABS AI</b><small>Personal Finance Copilot</small></div><button type="button" class="ai-reset" id="aiReset">↻</button></header><main class="ai-new-body"><div class="abs-mode-tabs"><button type="button" class="active" id="absOpenAIChat">✦ AI Chat</button><button type="button" id="absOpenTweets">𝕏 Tweets</button></div>${initial}<section class="ai-chat-thread">${chat}</section><button type="button" class="ai-new-topic" id="aiNewTopic">＋ NEW TOPIC</button></main><div class="ai-chat-composer"><input id="aiChatInput" placeholder="Ask ABS AI anything about your finances..." autocomplete="off"><button type="button" id="aiSend">↑</button></div></div>`;$('#screen').innerHTML=shell;const ask=(q,title=q)=>{const now=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});state.aiHistory.push({q,a:aiAnswerText(q),qTitle:title,time:now});renderAI();setTimeout(()=>document.querySelector('.ai-chat-composer input')?.focus(),50)};document.getElementById('absOpenTweets')?.addEventListener('click',()=>{state.aiMode='tweets';state.tweetFilter='all';renderAI()});document.getElementById('aiBack')?.addEventListener('click',()=>{state.tab='dashboard';state.aiMode='chat';closeTweetTimer();render()});document.getElementById('aiReset')?.addEventListener('click',()=>{state.aiHistory=[];renderAI()});document.querySelectorAll('[data-ai-key]').forEach(b=>b.addEventListener('click',()=>{const item=AI_HOME.find(x=>x.key===b.dataset.aiKey);ask('__'+b.dataset.aiKey,item?.title||b.dataset.aiKey)}));document.querySelectorAll('[data-ai-topic]').forEach(b=>b.addEventListener('click',()=>{const topic=b.dataset.aiTopic;const now=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});state.aiHistory.push({q:topic,a:aiTopicAnswer(topic),qTitle:topic,time:now});renderAI()}));document.querySelectorAll('[data-ai-question]').forEach(b=>b.addEventListener('click',()=>ask(b.dataset.aiQuestion)));const more=document.getElementById('aiMoreBtn');more?.addEventListener('click',()=>document.getElementById('aiMorePanel')?.classList.toggle('hidden'));document.getElementById('aiNewTopic')?.addEventListener('click',()=>{state.aiHistory=[];renderAI()});const input=document.getElementById('aiChatInput'),send=document.getElementById('aiSend');const sendChat=()=>{const text=input?.value.trim();if(!text)return;const now=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});state.aiHistory.push({q:text,a:aiFreeText(text),qTitle:text,time:now});renderAI();setTimeout(()=>document.querySelector('.ai-chat-composer input')?.focus(),50)};send?.addEventListener('click',sendChat);input?.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat()})}
 
 async function exportPDF(){if(!window.jspdf?.jsPDF)return toast("PDF engine is loading — try again");const {jsPDF}=window.jspdf;
 const doc=new jsPDF({unit:"pt",format:"a4"});
@@ -931,14 +964,15 @@ async function logout(){
   catch(err){console.error("Firebase sign-out failed:",err);}
   setup();
 }
-function openModal(title,body){$("#modalRoot").innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><h2>${esc(title)}</h2><button class="close" onclick="closeModal()">×</button></div>${body}</div></div>`}
-function closeModal(){if(liveChatUnsubscribe){try{liveChatUnsubscribe()}catch(e){}liveChatUnsubscribe=null}$("#modalRoot").innerHTML=""}
-window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=openHistory;window.addCategory=addCategory;window.removeCategory=removeCategory;window.editHistoryEntry=editHistoryEntry;window.exportPDF=exportPDF;window.openFeature=openFeature;window.openEditRecords=openEditRecords;window.closeModal=closeModal;window.renderDashboard=renderDashboard;window.setChartRange=setChartRange;window.openProfileEdit=openProfileEdit;window.openPassword=openPassword;window.toggleTheme=toggleTheme;window.exportData=exportData;window.openAvatarPicker=openAvatarPicker;window.setAvatar=setAvatar;window.logout=logout;window.openPeople=openPeople;window.openPersonForm=openPersonForm;window.openLedger=openLedger;window.openLedgerForm=openLedgerForm;window.processBulkImport=processBulkImport;window.downloadBulkTemplate=downloadBulkTemplate;window.resetFinancialData=resetFinancialData;window.openStatement=openStatement;window.exportStatementPDF=exportStatementPDF;window.requestPremium=requestPremium;window.refreshAppData=refreshAppData;window.goTab=goTab;
+function openModal(title,body){closeSupportTimer();$("#modalRoot").innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><h2>${esc(title)}</h2><button class="close" onclick="closeModal()">×</button></div>${body}</div></div>`}
+function closeModal(){closeSupportTimer();$("#modalRoot").innerHTML=""}
+window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=openHistory;window.addCategory=addCategory;window.removeCategory=removeCategory;window.editHistoryEntry=editHistoryEntry;window.exportPDF=exportPDF;window.openFeature=openFeature;window.openEditRecords=openEditRecords;window.closeModal=closeModal;window.renderDashboard=renderDashboard;window.setChartRange=setChartRange;window.openProfileEdit=openProfileEdit;window.openPassword=openPassword;window.toggleTheme=toggleTheme;window.exportData=exportData;window.openAvatarPicker=openAvatarPicker;window.setAvatar=setAvatar;window.logout=logout;window.openPeople=openPeople;window.openPersonForm=openPersonForm;window.openLedger=openLedger;window.openLedgerForm=openLedgerForm;window.processBulkImport=processBulkImport;window.downloadBulkTemplate=downloadBulkTemplate;window.resetFinancialData=resetFinancialData;window.openStatement=openStatement;window.exportStatementPDF=exportStatementPDF;window.requestPremium=requestPremium;window.refreshAppData=refreshAppData;window.goTab=goTab;window.openAppUpdate=openAppUpdate;window.openSupportChat=openSupportChat;window.openMyTweets=openMyTweets;window.handleAndroidBack=function(){if($("#modalRoot")?.innerHTML){closeModal();return true}if(state.tab==="ai"&&state.aiMode==="tweets"){state.aiMode="chat";renderAI();return true}if(state.tab!=="dashboard"){goTab("dashboard");return true}return false};
 setup();
 if(firebaseAdminReady()){
   firebase.auth().onAuthStateChanged(async user=>{
     if(user && state.user && state.user.uid===user.uid){
       watchUserProfile(user);
+      trackAppActivity();
       return;
     }
     stopUserProfileWatch();
