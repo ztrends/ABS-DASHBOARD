@@ -5,6 +5,7 @@ function persistSession(user){localStorage.setItem("abs_user",JSON.stringify(use
 function clearSession(){localStorage.removeItem("abs_user");document.cookie="abs_session=; path=/; max-age=0; SameSite=Lax"}
 const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("abs_theme")||"dark",data:null,admin:false,remoteAds:[],adsLoaded:false,adsLoading:false,adsFetchedAt:0};
 let userProfileUnsubscribe = null;
+let liveChatUnsubscribe = null;
 const ABS_PUBLIC_API_BASE = "https://abs-dashboard-t7up.onrender.com/api";
 
 // Initialize Firebase once the Firebase compat scripts and config from index.html are available.
@@ -137,6 +138,17 @@ function stopUserProfileWatch(){if(userProfileUnsubscribe){userProfileUnsubscrib
 function watchUserProfile(authUser){
   stopUserProfileWatch();
   if(!firebaseAdminReady()||!authUser||!state.user||authUser.uid!==state.user.uid)return;
+  // Record one activity event per local calendar day; Firestore rules should allow
+  // the signed-in owner to update their own users/{uid} profile document.
+  try{
+    const dayKey=`abs_activity_recorded_${authUser.uid}_${new Date().toISOString().slice(0,10)}`;
+    if(!localStorage.getItem(dayKey)){
+      localStorage.setItem(dayKey,'1');
+      const activityRef=firebase.firestore().collection("users").doc(authUser.uid);
+      const stamp=new Date().toISOString();
+      activityRef.set({lastActiveAt:stamp,lastLoginAt:stamp,activityLog:firebase.firestore.FieldValue.arrayUnion({date:stamp.slice(0,10),at:stamp,source:'app'})},{merge:true}).catch(err=>console.warn("ABS activity tracking could not be saved:",err));
+    }
+  }catch(activityErr){console.warn("ABS activity tracking skipped:",activityErr)}
   userProfileUnsubscribe=firebase.firestore().collection("users").doc(authUser.uid).onSnapshot(doc=>{
     if(!doc.exists){
       // A cached/offline miss is not proof that the account was deleted.
@@ -611,6 +623,39 @@ function openPassword(){
   };
 }
 function exportData(){exportPDF()}
+
+function checkAppUpdate(){
+  const releaseUrl='https://github.com/ztrends/ABS-DASHBOARD/releases/latest';
+  openModal('ABS App Update',`<div class="profile-edit-hero"><div class="profile-edit-icon">⬆</div><div><div class="eyebrow">APP VERSION</div><h3>Check for the latest version</h3><p>Open the official ABS DASHBOARD release page to see the newest APK and update notes.</p></div></div><a class="primary full" style="display:block;text-align:center;text-decoration:none;padding:14px;border-radius:12px" href="${releaseUrl}" target="_blank" rel="noopener">CHECK LATEST VERSION ↗</a><p class="muted" style="margin-top:12px">Only install updates from the official ABS DASHBOARD GitHub release page.</p>`);
+}
+async function openLiveChat(){
+  if(!state.user?.uid||!firebaseAdminReady())return toast('Please sign in again to use Live Chat.');
+  openModal('Live Chat with Admin',`<div class="eyebrow">ABS SUPPORT</div><h3>How can we help?</h3><p class="muted">Messages are visible to the ABS Admin team. Please do not send passwords or OTPs.</p><div id="userChatMessages" style="display:grid;gap:8px;max-height:42vh;overflow:auto;margin:14px 0"><p class="muted">Loading conversation…</p></div><form id="userChatForm"><textarea id="userChatText" maxlength="1500" required placeholder="Write your message…"></textarea><button class="primary full" style="margin-top:10px">SEND MESSAGE</button></form>`);
+  const uid=state.user.uid, chatRef=firebase.firestore().collection('users').doc(uid).collection('private').doc('adminChat');
+  const draw=data=>{
+    const box=$('userChatMessages');if(!box)return;
+    const messages=Array.isArray(data?.messages)?data.messages:[];
+    box.innerHTML=messages.length?messages.map(m=>`<div style="padding:10px 12px;border-radius:12px;background:${m.from==='admin'?'var(--surface-2,#eaf3ff)':'var(--surface,#f4f6fa)'};color:var(--text,#172033)"><b>${m.from==='admin'?'ABS Admin':'You'}</b><div style="overflow-wrap:anywhere">${esc(m.text||'')}</div><small>${esc(m.createdAt?new Date(m.createdAt).toLocaleString():'')}</small></div>`).join(''):'<p class="muted">No messages yet. Send your first message to Admin.</p>';
+    box.scrollTop=box.scrollHeight;
+  };
+  let unsub=null;
+  try{if(liveChatUnsubscribe){liveChatUnsubscribe();liveChatUnsubscribe=null}unsub=chatRef.onSnapshot(s=>draw(s.exists?s.data():{}),err=>{const box=$('userChatMessages');if(box)box.innerHTML='<p class="muted">Unable to load messages. Please try again later.</p>';console.warn('ABS live chat listener failed',err)})}catch(e){}
+  const form=$('userChatForm');
+  if(form)form.onsubmit=async e=>{
+    e.preventDefault();const input=$('userChatText'),text=input?.value.trim();if(!text)return;
+    const btn=form.querySelector('button');btn.disabled=true;
+    try{
+      const snap=await chatRef.get(),old=snap.exists?(snap.data()||{}):{},messages=Array.isArray(old.messages)?old.messages:[];
+      messages.push({id:`m-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,from:'user',text,createdAt:new Date().toISOString()});
+      await chatRef.set({messages:messages.slice(-200),updatedAt:new Date().toISOString()},{merge:true});
+      input.value='';
+    }catch(err){toast('Message could not be sent. Check your connection and try again.');console.error('ABS live chat send failed',err)}
+    finally{btn.disabled=false}
+  };
+  // Clean up Firestore listener when this modal is closed or replaced.
+  liveChatUnsubscribe=unsub;
+}
+
 function renderProfile(){
   const screenEl=document.getElementById("screen");
   if(!screenEl)return;
@@ -628,6 +673,8 @@ function renderProfile(){
         <button type="button" onclick="openPassword()"><span>🔒 Change Password</span><span>›</span></button>
         <button type="button" data-profile-action="theme"><span>◐ Theme</span><span>${esc(state.theme)}</span></button>
         <button type="button" data-profile-action="export"><span>⇩ Export My Data</span><span>›</span></button>
+        <button type="button" data-profile-action="update"><span>⬆ Update App<small>Check the latest ABS version</small></span><span>›</span></button>
+        <button type="button" data-profile-action="livechat"><span>✉ Live Chat with Admin<small>Message the ABS support team</small></span><span>›</span></button>
         <button type="button" class="about-app-option" onclick="openAboutApp()"><span><b>About App</b><small>Learn more about ABS Dashboard</small></span><span>›</span></button>
         <button type="button" class="danger" data-profile-action="logout"><span>Logout</span><span>→</span></button>
       </div>`; screenEl.querySelectorAll('[data-profile-action]').forEach(btn=>btn.addEventListener('click',()=>{
@@ -640,6 +687,8 @@ function renderProfile(){
       else if(a==='avatar')openAvatarPicker();
       else if(a==='premium')requestPremium();
       else if(a==='about')openAboutApp();
+      else if(a==='update')checkAppUpdate();
+      else if(a==='livechat')openLiveChat();
     }));
   }catch(err){
     console.error("ABS profile render error",err);
@@ -721,29 +770,37 @@ function openStatement(){
 async function downloadPdfDocument(doc, filename){
   try{
     const blob=doc.output('blob');
-    if(!blob || !blob.size) throw new Error('PDF file is empty.');
+    if(!blob||!blob.size)throw new Error('PDF file is empty.');
     const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url; a.download=filename; a.style.display='none';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    // Some mobile browsers ignore the download attribute for Blob URLs.
-    setTimeout(()=>{
-      if(document.visibilityState==='visible'){
-        const fallback=document.createElement('a');
-        fallback.href=url; fallback.target='_blank'; fallback.rel='noopener';
-        fallback.textContent='Open PDF'; fallback.style.cssText='position:fixed;left:-9999px;';
-        document.body.appendChild(fallback);
-        // Do not force a second tab unless the browser reports a likely blocked download.
-        fallback.remove();
+    const isMobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||document.body.classList.contains('capacitor');
+    // Mobile webviews often ignore the download attribute; open the PDF in the system/browser viewer.
+    if(isMobile){
+      const file=new File([blob],filename,{type:'application/pdf'});
+      if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
+        try{await navigator.share({files:[file],title:'ABS Statement',text:'Your ABS DASHBOARD statement PDF'});toast('Choose a save or share destination for your PDF.')}
+        catch(shareErr){if(shareErr?.name!=='AbortError')throw shareErr}
+      }else{
+        const opened=window.open(url,'_blank');
+        if(!opened){
+          const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';a.download=filename;
+          document.body.appendChild(a);a.click();a.remove();
+        }
+        toast('PDF opened. Use the viewer menu to Download or Save.');
       }
-      URL.revokeObjectURL(url);
-    },60000);
-    toast('Statement PDF generated. Check your Downloads folder.');
+    }else{
+      const a=document.createElement('a');a.href=url;a.download=filename;a.style.display='none';
+      document.body.appendChild(a);a.click();a.remove();
+      toast('Statement PDF generated. Check your Downloads folder.');
+    }
+    setTimeout(()=>URL.revokeObjectURL(url),120000);
   }catch(err){
     console.error('ABS PDF download failed:',err);
-    toast('PDF download failed. Please try again or use your browser menu.');
+    try{
+      const dataUrl=doc.output('datauristring');
+      const opened=window.open(dataUrl,'_blank','noopener');
+      if(opened)toast('PDF opened. Use the viewer menu to save it.');
+      else toast('PDF was created but the browser blocked opening it. Allow pop-ups and retry.');
+    }catch(fallbackErr){toast('PDF download failed. Please retry from Chrome or your browser menu.')}
   }
 }
 function exportStatementPDF(filter='all',from='',to=''){
@@ -875,7 +932,7 @@ async function logout(){
   setup();
 }
 function openModal(title,body){$("#modalRoot").innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><h2>${esc(title)}</h2><button class="close" onclick="closeModal()">×</button></div>${body}</div></div>`}
-function closeModal(){$("#modalRoot").innerHTML=""}
+function closeModal(){if(liveChatUnsubscribe){try{liveChatUnsubscribe()}catch(e){}liveChatUnsubscribe=null}$("#modalRoot").innerHTML=""}
 window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=openHistory;window.addCategory=addCategory;window.removeCategory=removeCategory;window.editHistoryEntry=editHistoryEntry;window.exportPDF=exportPDF;window.openFeature=openFeature;window.openEditRecords=openEditRecords;window.closeModal=closeModal;window.renderDashboard=renderDashboard;window.setChartRange=setChartRange;window.openProfileEdit=openProfileEdit;window.openPassword=openPassword;window.toggleTheme=toggleTheme;window.exportData=exportData;window.openAvatarPicker=openAvatarPicker;window.setAvatar=setAvatar;window.logout=logout;window.openPeople=openPeople;window.openPersonForm=openPersonForm;window.openLedger=openLedger;window.openLedgerForm=openLedgerForm;window.processBulkImport=processBulkImport;window.downloadBulkTemplate=downloadBulkTemplate;window.resetFinancialData=resetFinancialData;window.openStatement=openStatement;window.exportStatementPDF=exportStatementPDF;window.requestPremium=requestPremium;window.refreshAppData=refreshAppData;window.goTab=goTab;
 setup();
 if(firebaseAdminReady()){
