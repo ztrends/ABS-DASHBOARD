@@ -120,6 +120,8 @@ async function refreshAdmin(){
 
     state.summary = {
       users: state.users.length,
+      newToday: state.users.filter(u=>dateKey(u.createdAt||u.created_at)===new Date().toISOString().slice(0,10)).length,
+      activeToday: state.users.filter(u=>dateKey(u.lastActiveAt||u.lastLoginAt)===new Date().toISOString().slice(0,10)).length,
       verified: state.users.filter(u => u.verified === true).length,
       premium: state.users.filter(u => u.verified === true).length,
       feedback: state.feedback.length,
@@ -152,10 +154,29 @@ function renderStats(){
   $('adCount').textContent = s.ads ?? 0;
   $('verifiedCount').textContent = s.verified ?? 0;
   if($('requestCount')) $('requestCount').textContent = s.premium ?? 0;
+  if($('newTodayCount')) $('newTodayCount').textContent = s.newToday ?? 0;
+  if($('activeTodayCount')) $('activeTodayCount').textContent = s.activeToday ?? 0;
+  const activity=$('activitySummary');
+  if(activity){
+    const today=new Date().toISOString().slice(0,10);
+    const dayMs=24*60*60*1000, now=new Date();
+    const active=state.users.filter(u=>dateKey(u.lastActiveAt||u.lastLoginAt)===today).length;
+    const created=state.users.filter(u=>dateKey(u.createdAt||u.created_at)===today).length;
+    const weekStart=new Date(now.getTime()-6*dayMs).toISOString().slice(0,10);
+    const monthStart=new Date(now.getTime()-29*dayMs).toISOString().slice(0,10);
+    const weekly=new Set(),monthly=new Set();
+    state.users.forEach(u=>(Array.isArray(u.activityLog)?u.activityLog:[]).forEach(x=>{if(x?.date>=weekStart)weekly.add(u.uid);if(x?.date>=monthStart)monthly.add(u.uid)}));
+    const days=Array.from({length:7},(_,i)=>{const d=new Date(now.getTime()-(6-i)*dayMs);return d.toISOString().slice(0,10)});
+    const daily=days.map(day=>({day,count:new Set(state.users.filter(u=>(Array.isArray(u.activityLog)?u.activityLog:[]).some(x=>x?.date===day)).map(u=>u.uid)).size}));
+    const max=Math.max(1,...daily.map(x=>x.count));
+    activity.innerHTML=`<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"><span class="badge">Today · ${active} active</span><span class="badge">New today · ${created}</span><span class="badge">7 days · ${weekly.size} users</span><span class="badge">30 days · ${monthly.size} users</span></div><div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;align-items:end;height:118px">${daily.map(x=>`<div style="display:flex;flex-direction:column;justify-content:end;align-items:center;gap:6px;min-width:0;height:100%"><small>${x.count}</small><div title="${esc(x.day)}: ${x.count} active" style="width:100%;max-width:36px;height:${Math.max(4,x.count/max*76)}px;background:linear-gradient(180deg,#7c5cff,#1877f2);border-radius:7px 7px 3px 3px"></div><small style="font-size:10px">${esc(x.day.slice(5))}</small></div>`).join('')}</div><p class="muted">Activity is recorded from app sign-ins after this update. Earlier activity cannot be reconstructed retroactively.</p>`;
+  }
 }
 
+function clearUserSearch(){if($('userSearch'))$('userSearch').value='';renderUsers()}
 function renderUsers(){
-  const list = state.users;
+  const query=String($('userSearch')?.value||'').trim().toLowerCase();
+  const list = state.users.filter(u=>!query||[u.absId,u.abs_id,u.name,u.mobile,u.email].some(v=>String(v||'').toLowerCase().includes(query)));
 
   $('users').innerHTML = list.length
     ? list.map(u => `
@@ -178,7 +199,7 @@ function renderUsers(){
         </div>
 
         <div class="sub">
-          Created: ${esc(formatDate(u.createdAt))}
+          Created: ${esc(formatDate(u.createdAt || u.created_at))} · Last active: ${esc(formatDate(u.lastActiveAt || u.lastLoginAt || 'Not recorded'))}
         </div>
 
         <div class="row">
@@ -186,6 +207,8 @@ function renderUsers(){
             onclick="openUserManager('${escAttr(u.uid)}')">
             VIEW / MANAGE
           </button>
+          <button class="btn secondary" onclick="openUserDetails('${escAttr(u.uid)}')">FINANCE DETAILS</button>
+          <button class="btn secondary" onclick="openAdminChat('${escAttr(u.uid)}')">LIVE CHAT</button>
 
           <button class="btn ${u.verified ? 'secondary' : 'blue'}"
             onclick="toggleVerified('${escAttr(u.uid)}',${!u.verified})">
@@ -199,6 +222,58 @@ function renderUsers(){
       </div>
     `).join('')
     : '<div class="empty">No registered users found.</div>';
+}
+
+
+async function openUserDetails(uid){
+  const u=state.users.find(x=>x.uid===uid);if(!u)return;
+  $('modalTitle').textContent='Customer Finance Overview';
+  $('modalBody').innerHTML='<p class="muted">Loading saved account data…</p>';
+  $('modal').classList.remove('hidden');
+  try{
+    const d=await api(`/admin/firebase-users/${encodeURIComponent(uid)}/details`);
+    const s=d.summary||{};
+    $('modalBody').innerHTML=`
+      <div class="user"><div class="name">${esc(d.user?.name||u.name||'User')}</div><div class="sub">ABS ID: ${esc(d.user?.absId||u.absId||'—')} · ${esc(u.mobile||d.user?.mobile||'')}</div></div>
+      <div class="stats" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+       <div class="stat"><small>Total Income</small><b>${moneyAdmin(s.income)}</b></div>
+       <div class="stat"><small>Total Expenses</small><b>${moneyAdmin(s.expense)}</b></div>
+       <div class="stat"><small>Net Difference</small><b>${moneyAdmin(Number(s.income||0)-Number(s.expense||0))}</b></div>
+       <div class="stat"><small>Loan Principal</small><b>${moneyAdmin(s.loanPrincipal)}</b></div>
+       <div class="stat"><small>Pending EMI</small><b>${moneyAdmin(s.pendingEmi)}</b></div>
+       <div class="stat"><small>Transactions / Entries</small><b>${Number(s.entries||0)}</b></div>
+       <div class="stat"><small>To Receive</small><b>${moneyAdmin(s.toReceive)}</b></div>
+       <div class="stat"><small>To Pay</small><b>${moneyAdmin(s.toPay)}</b></div>
+      </div>
+      <h3 style="margin:18px 0 8px">Recent Financial Records</h3>
+      <div style="max-height:250px;overflow:auto">${(()=>{
+        const r=d.records||{};
+        const items=[
+          ...(r.income||[]).map(x=>({...x,kind:'Income',label:x.description||x.source||'Income',value:Number(x.amount||0)})),
+          ...(r.expenses||[]).map(x=>({...x,kind:'Expense',label:x.description||x.category||'Expense',value:Number(x.amount||0)})),
+          ...(r.emi||[]).map(x=>({...x,kind:'EMI',label:x.name||x.loan||'EMI',value:Number(x.amount||x.emi||0)})),
+          ...(r.loans||[]).map(x=>({...x,kind:'Loan',label:x.name||'Loan',value:Number(x.principal||0)})),
+          ...(r.ledger||[]).map(x=>({...x,kind:'Ledger',label:`${x.person||'Person'} · ${x.description||x.direction||''}`,value:Number(x.amount||0)}))
+        ].sort((a,b)=>String(b.date||b.createdAt||'').localeCompare(String(a.date||a.createdAt||''))).slice(0,30);
+        return items.length?items.map(x=>`<div style="display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)"><div><b>${esc(x.label)}</b><div class="sub">${esc(x.date||'—')} · ${esc(x.kind)}</div></div><strong>${moneyAdmin(x.value)}</strong></div>`).join(''):'<p class="muted">No financial records found.</p>';
+      })()}</div>
+      <p class="muted">This view displays only records returned by the user's saved private data. Activity history begins after users update to the new app version.</p>
+      <button class="btn full" onclick="openAdminChat('${escAttr(uid)}')">OPEN LIVE CHAT</button>`;
+  }catch(e){$('modalBody').innerHTML=`<div class="msg">${esc(e.message||'Could not load customer details.')}</div>`}
+}
+function moneyAdmin(n){return '₹'+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2})}
+async function openAdminChat(uid){
+  const u=state.users.find(x=>x.uid===uid);if(!u)return;
+  $('modalTitle').textContent=`Live Chat · ${u.name||'Customer'}`;
+  $('modalBody').innerHTML='<p class="muted">Loading conversation…</p>';
+  $('modal').classList.remove('hidden');
+  try{
+    const d=await api(`/admin/firebase-users/${encodeURIComponent(uid)}/chat`);
+    const messages=Array.isArray(d.messages)?d.messages:[];
+    $('modalBody').innerHTML=`<div id="adminChatMessages" style="max-height:45vh;overflow:auto;display:grid;gap:8px;margin:12px 0">${messages.length?messages.map(m=>`<div style="padding:10px 12px;border-radius:12px;background:${m.from==='admin'?'#18372e':'#171e2e'}"><b>${m.from==='admin'?'Admin':'Customer'}</b><div>${esc(m.text||'')}</div><small class="muted">${esc(formatDate(m.createdAt||''))}</small></div>`).join(''):'<p class="muted">No messages yet. Send a reply to start the conversation.</p>'}</div>
+      <form id="adminChatForm"><textarea id="adminChatReply" maxlength="1500" required placeholder="Write a reply…"></textarea><button class="btn full" style="margin-top:10px">SEND REPLY</button></form>`;
+    $('adminChatForm').onsubmit=async e=>{e.preventDefault();const text=$('adminChatReply').value.trim();if(!text)return;const btn=e.submitter;btn.disabled=true;try{await api(`/admin/firebase-users/${encodeURIComponent(uid)}/chat`,{method:'POST',body:JSON.stringify({text})});await openAdminChat(uid)}catch(err){alert(err.message||'Reply failed')}finally{btn.disabled=false}};
+  }catch(e){$('modalBody').innerHTML=`<div class="msg">${esc(e.message||'Could not load chat.')}</div>`}
 }
 
 function openUserManager(uid){
@@ -539,9 +614,17 @@ function renderFeedback(){
 
 function toLocalDateTime(v){ if(!v) return ''; const d=new Date(v); if(isNaN(d)) return ''; const pad=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 
+function dateKey(v){
+  if(!v)return '';
+  let d;
+  if(typeof v==='object'&&typeof v.toDate==='function')d=v.toDate();
+  else if(typeof v==='object'&&Number.isFinite(Number(v._seconds??v.seconds)))d=new Date(Number(v._seconds??v.seconds)*1000);
+  else d=new Date(v);
+  return isNaN(d)?'':d.toISOString().slice(0,10);
+}
 function formatDate(v){
   if(!v) return '—';
-  const d = new Date(v);
+  const d = (typeof v==='object'&&Number.isFinite(Number(v._seconds??v.seconds)))?new Date(Number(v._seconds??v.seconds)*1000):new Date(v);
   return isNaN(d)
     ? '—'
     : d.toLocaleString('en-IN', {
