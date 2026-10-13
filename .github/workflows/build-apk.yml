@@ -63,6 +63,59 @@ jobs:
           npx cap sync android
 
      
+      - name: Upgrade Android toolchain for AndroidX Browser 1.9
+        run: |
+          cd frontend/android
+          python3 - <<'PYFIX'
+          from pathlib import Path
+          import re
+
+          # AndroidX Browser 1.9 requires AGP >= 8.9.1 and compileSdk >= 36.
+          gradle_file = Path('build.gradle')
+          gradle_text = gradle_file.read_text()
+          gradle_text, agp_count = re.subn(
+              r"com\.android\.tools\.build:gradle:[0-9.]+",
+              "com.android.tools.build:gradle:8.9.1",
+              gradle_text, count=1
+          )
+          if agp_count != 1:
+              raise SystemExit('Could not find Android Gradle Plugin version in android/build.gradle')
+          gradle_file.write_text(gradle_text)
+
+          variables = Path('variables.gradle')
+          variables_text = variables.read_text()
+          variables_text, sdk_count = re.subn(
+              r"compileSdkVersion\s*=\s*\d+",
+              "compileSdkVersion = 36",
+              variables_text, count=1
+          )
+          if sdk_count != 1:
+              raise SystemExit('Could not find compileSdkVersion in android/variables.gradle')
+          variables.write_text(variables_text)
+
+          wrapper = Path('gradle/wrapper/gradle-wrapper.properties')
+          wrapper_text = wrapper.read_text()
+          wrapper_text, wrapper_count = re.subn(
+              r"gradle-[0-9.]+-(?:all|bin)\.zip",
+              "gradle-8.11.1-all.zip",
+              wrapper_text, count=1
+          )
+          if wrapper_count != 1:
+              raise SystemExit('Could not update Gradle wrapper distribution URL')
+          wrapper.write_text(wrapper_text)
+          PYFIX
+
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ] && [ -n "${ANDROID_HOME:-}" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "ERROR: Android sdkmanager was not found on the runner"
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+
       - name: Set APK version and optional stable signing
         env:
           ABS_KEYSTORE_BASE64: ${{ secrets.ABS_KEYSTORE_BASE64 }}
