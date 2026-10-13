@@ -118,7 +118,7 @@ app.get('/api/admin/firebase-users/:uid/details',admin,async(req,res)=>{
     const loans=Array.isArray(data.loans)?data.loans:[];
     const ledger=Array.isArray(data.ledger)?data.ledger:[];
     const sum=arr=>arr.reduce((n,x)=>n+Number(x.amount||0),0);
-    res.json({ok:true,user:{uid,...profile},summary:{income:sum(income),expense:sum(expenses),emi:sum(emi),loanPrincipal:loans.reduce((n,x)=>n+Number(x.principal||0),0),toReceive:ledger.filter(x=>['lena','receive'].includes(x.direction)).reduce((n,x)=>n+Number(x.amount||0),0),toPay:ledger.filter(x=>['dena','pay'].includes(x.direction)).reduce((n,x)=>n+Number(x.amount||0),0),entries:income.length+expenses.length+emi.length+loans.length+ledger.length},records:{income,expenses,emi,loans,ledger}});
+    res.json({ok:true,user:{uid,...profile},summary:{income:sum(income),expense:sum(expenses),emi:sum(emi),pendingEmi:emi.filter(x=>!['paid','completed','done'].includes(String(x.status||'').toLowerCase())).reduce((n,x)=>n+Number(x.amount||x.emi||0),0),loanPrincipal:loans.reduce((n,x)=>n+Number(x.principal||0),0),toReceive:ledger.filter(x=>['lena','receive'].includes(x.direction)).reduce((n,x)=>n+Number(x.amount||0),0),toPay:ledger.filter(x=>['dena','pay'].includes(x.direction)).reduce((n,x)=>n+Number(x.amount||0),0),entries:income.length+expenses.length+emi.length+loans.length+ledger.length},records:{income,expenses,emi,loans,ledger}});
   }catch(e){publicAdminError(res,e)}
 });
 
@@ -171,6 +171,35 @@ app.patch('/api/admin/firebase-users/:uid',admin,async(req,res)=>{
     await ref.set(update,{merge:true});
     const after=await ref.get();
     res.json({ok:true,user:{uid,...after.data()}});
+  }catch(e){publicAdminError(res,e)}
+});
+
+
+app.get('/api/admin/firebase-users/:uid/chat',admin,async(req,res)=>{
+  const uid=String(req.params.uid||'').trim();
+  try{
+    const sdk=getFirebaseAdmin();
+    const snap=await sdk.firestore().collection('users').doc(uid).collection('private').doc('adminChat').get();
+    const data=snap.exists?(snap.data()||{}):{};
+    res.json({ok:true,messages:Array.isArray(data.messages)?data.messages:[]});
+  }catch(e){publicAdminError(res,e)}
+});
+app.post('/api/admin/firebase-users/:uid/chat',admin,async(req,res)=>{
+  const uid=String(req.params.uid||'').trim(), text=String(req.body?.text||'').trim();
+  if(!text||text.length>1500)return res.status(400).json({error:'Reply must be between 1 and 1500 characters.'});
+  try{
+    const sdk=getFirebaseAdmin(), dbfs=sdk.firestore();
+    const userRef=dbfs.collection('users').doc(uid);
+    const profile=await userRef.get();
+    if(!profile.exists)return res.status(404).json({error:'Firebase user profile was not found.'});
+    const chatRef=userRef.collection('private').doc('adminChat');
+    await dbfs.runTransaction(async tx=>{
+      const snap=await tx.get(chatRef), old=snap.exists?(snap.data()||{}):{};
+      const messages=Array.isArray(old.messages)?old.messages:[];
+      messages.push({id:`m-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,from:'admin',text,createdAt:now()});
+      tx.set(chatRef,{messages:messages.slice(-200),updatedAt:now()},{merge:true});
+    });
+    res.json({ok:true});
   }catch(e){publicAdminError(res,e)}
 });
 
