@@ -7,7 +7,6 @@ const jwt=require('jsonwebtoken');
 const Database=require('better-sqlite3');
 const rateLimit=require('express-rate-limit');
 const firebaseAdmin=require('firebase-admin');
-const multer=require('multer');
 
 const ROOT=path.join(__dirname,'..');
 const DB_DIR=path.join(ROOT,'data'); fs.mkdirSync(DB_DIR,{recursive:true});
@@ -20,6 +19,7 @@ CREATE TABLE IF NOT EXISTS loans(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id IN
 CREATE TABLE IF NOT EXISTS feedback(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,name TEXT,mobile TEXT,type TEXT,rating INTEGER,message TEXT,created_at TEXT NOT NULL,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS ads(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,text TEXT,badge TEXT,image TEXT,link TEXT,active INTEGER DEFAULT 1,starts_at TEXT,ends_at TEXT,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
+CREATE TABLE IF NOT EXISTS tweets(id INTEGER PRIMARY KEY AUTOINCREMENT, firebase_uid TEXT, abs_id TEXT NOT NULL, verified INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '', link_url TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 `);
 // Safe migrations for existing Render SQLite databases.
 const adColumns = new Set(db.prepare('PRAGMA table_info(ads)').all().map(c=>c.name));
@@ -50,12 +50,9 @@ function getFirebaseAdmin(){
     err.code='FIREBASE_ADMIN_BAD_CREDENTIALS';
     throw err;
   }
-  const projectId=process.env.FIREBASE_PROJECT_ID||serviceAccount.project_id||'abs-dashboard-dd0b2';
-  const storageBucket=process.env.FIREBASE_STORAGE_BUCKET||'abs-dashboard-dd0b2.firebasestorage.app';
   firebaseAdmin.initializeApp({
     credential:firebaseAdmin.credential.cert(serviceAccount),
-    projectId,
-    storageBucket
+    projectId:process.env.FIREBASE_PROJECT_ID||serviceAccount.project_id||'abs-dashboard-dd0b2'
   });
   return firebaseAdmin;
 }
@@ -74,205 +71,11 @@ function nextAbsId(mobile){const last=mobile.slice(-2); const row=db.prepare("SE
 function sign(u){return jwt.sign({sub:u.id,mobile:u.mobile,role:'user'},JWT_SECRET,{expiresIn:'7d'})}
 function auth(req,res,next){try{const h=req.headers.authorization||'';if(!h.startsWith('Bearer '))throw 0;const p=jwt.verify(h.slice(7),JWT_SECRET);const u=db.prepare('SELECT id,abs_id,name,mobile,verified,premium,avatar,created_at FROM users WHERE id=?').get(p.sub);if(!u)throw 0;req.user=u;next()}catch(e){res.status(401).json({error:'Unauthorized'})}}
 function admin(req,res,next){try{const h=req.headers.authorization||'';if(!h.startsWith('Bearer '))throw 0;const p=jwt.verify(h.slice(7),JWT_SECRET);if(p.role!=='admin')throw 0;next()}catch(e){res.status(401).json({error:'Admin authorization required'})}}
-function firebaseAuth(req,res,next){
-  (async()=>{
-    const h=req.headers.authorization||'';
-    if(!h.startsWith('Bearer ')) return res.status(401).json({error:'Sign in to use this feature.'});
-    try{
-      const sdk=getFirebaseAdmin();
-      req.firebaseUser=await sdk.auth().verifyIdToken(h.slice(7));
-      next();
-    }catch(e){
-      console.warn('Firebase token verification failed:',e.code||e.message);
-      return res.status(401).json({error:'Your session has expired. Please sign in again.'});
-    }
-  })().catch(e=>{console.error(e);res.status(500).json({error:'Unable to verify account.'})});
-}
+async function firebaseUserAuth(req,res,next){try{const h=req.headers.authorization||'';if(!h.startsWith('Bearer '))return res.status(401).json({error:'Please login to ABS first.'});const sdk=getFirebaseAdmin();const decoded=await sdk.auth().verifyIdToken(h.slice(7));const snap=await sdk.firestore().collection('users').doc(decoded.uid).get();const profile=snap.exists?(snap.data()||{}):{};req.firebaseUser={uid:decoded.uid,absId:String(profile.absId||profile.abs_id||profile.absID||'').trim(),verified:profile.verified===true,name:String(profile.name||'')};if(!req.firebaseUser.absId)req.firebaseUser.absId='ABS USER';next()}catch(e){console.error('ABS Tweet auth failed:',e.message);res.status(401).json({error:'Session could not be verified. Please sign in again.'})}}
 const app=express();
 app.use(cors()); app.use(express.json({limit:'10mb'}));
 app.use('/api/auth/',rateLimit({windowMs:15*60*1000,max:100}));
 app.get('/api/health',(req,res)=>res.json({ok:true,service:'ABS DASHBOARD API',time:now()}));
-
-// Firebase-backed public features. Only the signed-in user's Firebase token is accepted.
-function firebaseBucket(sdk){
-  return sdk.storage().bucket(process.env.FIREBASE_STORAGE_BUCKET||'abs-dashboard-dd0b2.firebasestorage.app');
-}
-async function currentUpdateDoc(){
-  const sdk=getFirebaseAdmin();
-  const snap=await sdk.firestore().collection('appConfig').doc('currentUpdate').get();
-  return snap.exists?(snap.data()||{}):null;
-}
-app.get('/api/app-update',async(req,res)=>{
-  try{
-    const d=await currentUpdateDoc();
-    res.set('Cache-Control','no-store');
-    if(!d||!d.storagePath) return res.json({available:false,version:'',notes:'',uploadedAt:'',size:0});
-    res.json({available:true,version:String(d.version||''),notes:String(d.notes||''),uploadedAt:d.uploadedAt||'',size:Number(d.size||0),fileName:String(d.fileName||'ABS-DASHBOARD.apk')});
-  }catch(e){publicAdminError(res,e)}
-});
-app.get('/api/app-update/download',async(req,res)=>{
-  try{
-    const d=await currentUpdateDoc();
-    if(!d||!d.storagePath) return res.status(404).json({error:'No update has been uploaded yet.'});
-    const safeName=String(d.fileName||'ABS-DASHBOARD.apk').replace(/[\\"\r\n]/g,'_');
-    res.setHeader('Content-Type','application/vnd.android.package-archive');
-    res.setHeader('Content-Disposition',`attachment; filename="${safeName}"`);
-    res.setHeader('Cache-Control','no-store, no-cache, must-revalidate');
-    const stream=firebaseBucket(getFirebaseAdmin()).file(d.storagePath).createReadStream();
-    stream.on('error',e=>{console.error('APK download failed:',e.message);if(!res.headersSent)res.status(404).json({error:'The uploaded APK could not be opened. Ask the administrator to upload it again.'});else res.destroy(e)});
-    stream.pipe(res);
-  }catch(e){publicAdminError(res,e)}
-});
-
-app.post('/api/activity',firebaseAuth,async(req,res)=>{
-  try{
-    const sdk=getFirebaseAdmin(),dbfs=sdk.firestore(),uid=req.firebaseUser.uid;
-    const userRef=dbfs.collection('users').doc(uid),snap=await userRef.get();
-    if(!snap.exists) return res.status(404).json({error:'ABS user profile was not found.'});
-    const profile=snap.data()||{},at=now(),date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(at));
-    const activityRef=dbfs.collection('appActivity').doc(`${uid}_${date}`);
-    await activityRef.set({uid,absId:String(profile.absId||''),at,date,source:'app-open'},{merge:true});
-    await userRef.set({lastActiveAt:at,lastLoginAt:profile.lastLoginAt||at},{merge:true});
-    res.json({ok:true,date});
-  }catch(e){publicAdminError(res,e)}
-});
-
-function tweetShape(doc,viewerUid,adminView=false){
-  const d=doc.data()||{};
-  const out={id:doc.id,absId:String(d.absId||'ABS USER'),verified:d.verified===true,text:String(d.text||''),createdAt:d.createdAt||'',createdAtMs:Number(d.createdAtMs||0)};
-  if(adminView)out.uid=String(d.uid||''); else out.isMine=String(d.uid||'')===String(viewerUid||'');
-  return out;
-}
-app.get('/api/tweets',firebaseAuth,async(req,res)=>{
-  try{
-    const sdk=getFirebaseAdmin(),dbfs=sdk.firestore();
-    let query=dbfs.collection('tweets').orderBy('createdAtMs','desc');
-    const cursor=String(req.query.before||'').trim();
-    if(cursor){const snap=await dbfs.collection('tweets').doc(cursor).get();if(snap.exists)query=query.startAfter(snap)}
-    const snap=await query.limit(40).get();
-    res.set('Cache-Control','no-store');
-    res.json({items:snap.docs.map(d=>tweetShape(d,req.firebaseUser.uid)),hasMore:snap.size===40,nextCursor:snap.docs.length?snap.docs[snap.docs.length-1].id:''});
-  }catch(e){publicAdminError(res,e)}
-});
-app.post('/api/tweets',firebaseAuth,async(req,res)=>{
-  const text=String(req.body?.text||'').trim();
-  if(!text||text.length>280)return res.status(400).json({error:'Tweet must contain 1–280 characters.'});
-  try{
-    const sdk=getFirebaseAdmin(),dbfs=sdk.firestore(),uid=req.firebaseUser.uid;
-    const profileSnap=await dbfs.collection('users').doc(uid).get();
-    if(!profileSnap.exists)return res.status(404).json({error:'ABS user profile was not found.'});
-    const profile=profileSnap.data()||{};
-    if(!profile.absId)return res.status(400).json({error:'Your ABS ID is missing. Contact Admin before posting.'});
-    const at=now(),ref=dbfs.collection('tweets').doc();
-    await ref.set({uid,absId:String(profile.absId),verified:profile.verified===true,text,createdAt:at,createdAtMs:Date.now()});
-    res.status(201).json({ok:true,item:{id:ref.id,absId:String(profile.absId),verified:profile.verified===true,text,createdAt:at,createdAtMs:Date.now(),isMine:true}});
-  }catch(e){publicAdminError(res,e)}
-});
-app.delete('/api/tweets/:id',firebaseAuth,async(req,res)=>{
-  try{
-    const ref=getFirebaseAdmin().firestore().collection('tweets').doc(String(req.params.id||''));
-    const snap=await ref.get();if(!snap.exists)return res.status(404).json({error:'Tweet was not found.'});
-    if(String(snap.data()?.uid||'')!==String(req.firebaseUser.uid))return res.status(403).json({error:'You can delete only your own tweets.'});
-    await ref.delete();res.json({ok:true});
-  }catch(e){publicAdminError(res,e)}
-});
-
-// Support Chat messages are separate Firestore documents, so history does not disappear
-// when a new message is sent and the thread is not constrained to one large document.
-async function readSupportThread(uid){
-  const dbfs=getFirebaseAdmin().firestore(),parent=dbfs.collection('users').doc(uid).collection('private').doc('adminChat');
-  const parentSnap=await parent.get(),parentData=parentSnap.exists?(parentSnap.data()||{}):{};
-  const legacy=Array.isArray(parentData.messages)?parentData.messages:[];
-  const msgSnap=await parent.collection('messages').orderBy('createdAtMs','desc').limit(300).get();
-  const modern=msgSnap.docs.map(d=>({id:d.id,...(d.data()||{})})).reverse();
-  const messages=[...legacy.map((m,i)=>({...m,id:m.id||`legacy-${i}`})),...modern];
-  return {parent,parentData,messages,updatedAt:parentData.updatedAt||''};
-}
-async function storeSupportMessage(uid,from,text){
-  const sdk=getFirebaseAdmin(),dbfs=sdk.firestore(),userRef=dbfs.collection('users').doc(uid);
-  const userSnap=await userRef.get();if(!userSnap.exists)throw Object.assign(new Error('ABS user profile was not found.'),{code:'not-found'});
-  const profile=userSnap.data()||{},parent=userRef.collection('private').doc('adminChat'),at=now(),id=`m-${Date.now()}-${Math.random().toString(36).slice(2,9)}`;
-  const msg={from,text,createdAt:at,createdAtMs:Date.now(),id};
-  await parent.collection('messages').doc(id).set(msg);
-  await parent.set({lastMessage:{from,text,createdAt:at},updatedAt:at,absId:String(profile.absId||''),name:String(profile.name||''),mobile:String(profile.mobile||'')},{merge:true});
-  return msg;
-}
-function cleanChatMessage(m){return {id:String(m.id||''),from:m.from==='admin'?'admin':'user',text:String(m.text||''),createdAt:m.createdAt||'',createdAtMs:Number(m.createdAtMs||0)}}
-app.get('/api/support-chat',firebaseAuth,async(req,res)=>{
-  try{const thread=await readSupportThread(req.firebaseUser.uid);res.set('Cache-Control','no-store');res.json({ok:true,messages:thread.messages.map(cleanChatMessage),updatedAt:thread.updatedAt})}
-  catch(e){publicAdminError(res,e)}
-});
-app.post('/api/support-chat',firebaseAuth,async(req,res)=>{
-  const text=String(req.body?.text||'').trim();
-  if(!text||text.length>1500)return res.status(400).json({error:'Message must contain 1–1500 characters.'});
-  try{const msg=await storeSupportMessage(req.firebaseUser.uid,'user',text);res.status(201).json({ok:true,message:cleanChatMessage(msg)})}
-  catch(e){publicAdminError(res,e)}
-});
-app.get('/api/admin/support-chats',admin,async(req,res)=>{
-  try{
-    const sdk=getFirebaseAdmin(),dbfs=sdk.firestore(),snap=await dbfs.collection('users').get();
-    const items=await Promise.all(snap.docs.map(async doc=>{
-      const p=doc.data()||{};let meta={};
-      try{const c=await doc.ref.collection('private').doc('adminChat').get();if(c.exists)meta=c.data()||{}}catch(e){}
-      return {uid:doc.id,absId:String(p.absId||''),name:String(p.name||''),mobile:String(p.mobile||''),verified:p.verified===true,lastMessage:meta.lastMessage||null,updatedAt:meta.updatedAt||p.lastActiveAt||p.lastActive||p.createdAt||''};
-    }));
-    items.sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
-    res.json({items});
-  }catch(e){publicAdminError(res,e)}
-});
-app.get('/api/admin/support-chats/:uid',admin,async(req,res)=>{
-  const uid=String(req.params.uid||'').trim();if(!uid)return res.status(400).json({error:'ABS UID required.'});
-  try{const thread=await readSupportThread(uid);res.set('Cache-Control','no-store');res.json({ok:true,messages:thread.messages.map(cleanChatMessage),updatedAt:thread.updatedAt})}
-  catch(e){publicAdminError(res,e)}
-});
-app.post('/api/admin/support-chats/:uid',admin,async(req,res)=>{
-  const uid=String(req.params.uid||'').trim(),text=String(req.body?.text||'').trim();
-  if(!text||text.length>1500)return res.status(400).json({error:'Message must contain 1–1500 characters.'});
-  try{const msg=await storeSupportMessage(uid,'admin',text);res.status(201).json({ok:true,message:cleanChatMessage(msg)})}
-  catch(e){publicAdminError(res,e)}
-});
-
-const apkUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:120*1024*1024},fileFilter:(req,file,cb)=>{
-  if(!String(file.originalname||'').toLowerCase().endsWith('.apk'))return cb(new Error('Please select an APK file (.apk).'));
-  cb(null,true);
-}});
-app.post('/api/admin/app-update',admin,(req,res,next)=>{
-  apkUpload.single('apk')(req,res,async err=>{
-    if(err)return res.status(err.code==='LIMIT_FILE_SIZE'?413:400).json({error:err.code==='LIMIT_FILE_SIZE'?'APK must be 120 MB or smaller.':err.message||'APK upload failed.'});
-    if(!req.file)return res.status(400).json({error:'Choose an APK file first.'});
-    const version=String(req.body?.version||'').trim(),notes=String(req.body?.notes||'').trim();
-    if(!version)return res.status(400).json({error:'Version is required (for example 1.0.17).'});
-    try{
-      const sdk=getFirebaseAdmin(),dbfs=sdk.firestore(),storagePath='abs-dashboard/releases/current.apk';
-      const bucket=firebaseBucket(sdk),file=bucket.file(storagePath);
-      await file.save(req.file.buffer,{resumable:false,metadata:{contentType:'application/vnd.android.package-archive',cacheControl:'no-store'}});
-      const meta={available:true,version,notes:notes.slice(0,1000),uploadedAt:now(),size:req.file.size,fileName:'ABS-DASHBOARD.apk',storagePath};
-      await dbfs.collection('appConfig').doc('currentUpdate').set(meta);
-      res.status(201).json({ok:true,update:{version,notes:meta.notes,uploadedAt:meta.uploadedAt,size:meta.size,fileName:meta.fileName}});
-    }catch(e){console.error('ABS app update upload failed:',e);res.status(500).json({error:'APK upload failed. Check that Render Firebase service account has Firebase Storage/Object Admin permission and FIREBASE_STORAGE_BUCKET is set correctly.'})}
-  });
-});
-app.get('/api/admin/tweets',admin,async(req,res)=>{
-  try{const sdk=getFirebaseAdmin(),snap=await sdk.firestore().collection('tweets').orderBy('createdAtMs','desc').limit(300).get();res.json({items:snap.docs.map(d=>tweetShape(d,'',true))})}
-  catch(e){publicAdminError(res,e)}
-});
-app.post('/api/admin/tweets',admin,async(req,res)=>{
-  const text=String(req.body?.text||'').trim();if(!text||text.length>280)return res.status(400).json({error:'Tweet must contain 1–280 characters.'});
-  try{
-    const sdk=getFirebaseAdmin(),dbfs=sdk.firestore(),profileSnap=await dbfs.collection('users').doc(FIREBASE_ADMIN_UID).get(),p=profileSnap.exists?(profileSnap.data()||{}):{};
-    const at=now(),ref=dbfs.collection('tweets').doc();
-    await ref.set({uid:FIREBASE_ADMIN_UID,absId:String(p.absId||'ABSADMIN'),verified:p.verified===true,text,createdAt:at,createdAtMs:Date.now(),postedByAdmin:true});
-    res.status(201).json({ok:true,item:tweetShape(await ref.get(),'',true)});
-  }catch(e){publicAdminError(res,e)}
-});
-app.delete('/api/admin/tweets/:id',admin,async(req,res)=>{
-  try{const ref=getFirebaseAdmin().firestore().collection('tweets').doc(String(req.params.id||'')),snap=await ref.get();if(!snap.exists)return res.status(404).json({error:'Tweet was not found.'});await ref.delete();res.json({ok:true})}
-  catch(e){publicAdminError(res,e)}
-});
-app.get('/api/admin/activity',admin,async(req,res)=>{
-  try{const snap=await getFirebaseAdmin().firestore().collection('appActivity').orderBy('at','desc').limit(2000).get();res.json({items:snap.docs.map(d=>({id:d.id,...(d.data()||{})}))})}
-  catch(e){publicAdminError(res,e)}
-});
 app.post('/api/auth/register',(req,res)=>{const {name,mobile,password}=req.body||{};if(!name||!/^[6-9]\d{9}$/.test(String(mobile||''))||String(password||'').length<6)return res.status(400).json({error:'Name, valid 10-digit mobile and 6+ character password are required'});if(db.prepare('SELECT 1 FROM users WHERE mobile=?').get(mobile))return res.status(409).json({error:'Mobile number already registered'});const created=now(),hash=bcrypt.hashSync(password,12),absId=nextAbsId(String(mobile));const info=db.prepare('INSERT INTO users(abs_id,name,mobile,password_hash,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(absId,name,mobile,hash,created,created);const u=db.prepare('SELECT id,abs_id,name,mobile,verified,premium,avatar,created_at FROM users WHERE id=?').get(info.lastInsertRowid);res.status(201).json({user:u,token:sign(u)})});
 app.post('/api/auth/login',(req,res)=>{const {identifier,password}=req.body||{};const u=db.prepare('SELECT * FROM users WHERE mobile=? OR abs_id=?').get(identifier,identifier);if(!u||!bcrypt.compareSync(password||'',u.password_hash))return res.status(401).json({error:'Incorrect login details'});res.json({user:{id:u.id,abs_id:u.abs_id,name:u.name,mobile:u.mobile,verified:!!u.verified,premium:!!u.premium,avatar:u.avatar,created_at:u.created_at},token:sign(u)})});
 app.get('/api/me',auth,(req,res)=>res.json({user:req.user}));
@@ -285,6 +88,13 @@ app.get('/api/loans',auth,(req,res)=>res.json({items:db.prepare('SELECT * FROM l
 app.post('/api/loans',auth,(req,res)=>{const x=req.body||{};if(!x.name)return res.status(400).json({error:'Loan name is required'});const info=db.prepare('INSERT INTO loans(user_id,name,principal,interest,emi,start_date,end_date,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run(req.user.id,x.name,Number(x.principal||0),Number(x.interest||0),Number(x.emi||0),x.start_date||'',x.end_date||'',x.status||'Active',now());res.status(201).json({item:db.prepare('SELECT * FROM loans WHERE id=?').get(info.lastInsertRowid)})});
 app.get('/api/summary',auth,(req,res)=>{const t=db.prepare(`SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) income,COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) expense,COUNT(*) entries FROM transactions WHERE user_id=?`).get(req.user.id);res.json({...t,net:t.income-t.expense})});
 app.post('/api/feedback',auth,(req,res)=>{const x=req.body||{};db.prepare('INSERT INTO feedback(user_id,name,mobile,type,rating,message,created_at) VALUES(?,?,?,?,?,?,?)').run(req.user.id,req.user.name,req.user.mobile,x.type||'Feedback',Number(x.rating||0),x.message||'',now());res.status(201).json({ok:true})});
+// ABS Tweet: persistent community posts. Only ABS ID is returned publicly, never a user's name/mobile.
+app.get('/api/tweets',firebaseUserAuth,(req,res)=>{const mine=req.query.mine==='1';const rows=mine?db.prepare('SELECT id,abs_id,verified,text,image_url,link_url,created_at,firebase_uid FROM tweets WHERE firebase_uid=? ORDER BY id DESC LIMIT 200').all(req.firebaseUser.uid):db.prepare('SELECT id,abs_id,verified,text,image_url,link_url,created_at FROM tweets ORDER BY id DESC LIMIT 200').all();res.json({items:rows.map(x=>({id:String(x.id),abs_id:x.abs_id,verified:!!x.verified,text:x.text,image_url:x.image_url,link_url:x.link_url,created_at:x.created_at,...(mine?{owner:true}:{})}))})});
+app.post('/api/tweets',firebaseUserAuth,(req,res)=>{const text=String(req.body?.text||'').trim();if(!text||text.length>500)return res.status(400).json({error:'Tweet text is required and must be 500 characters or less.'});const info=db.prepare('INSERT INTO tweets(firebase_uid,abs_id,verified,text,image_url,link_url,created_at) VALUES(?,?,?,?,?,?,?)').run(req.firebaseUser.uid,req.firebaseUser.absId,req.firebaseUser.verified?1:0,text,'','',now());res.status(201).json({ok:true,id:String(info.lastInsertRowid)})});
+app.delete('/api/tweets/:id',firebaseUserAuth,(req,res)=>{const info=db.prepare('DELETE FROM tweets WHERE id=? AND firebase_uid=?').run(Number(req.params.id),req.firebaseUser.uid);if(!info.changes)return res.status(404).json({error:'Tweet not found or it does not belong to your account.'});res.json({ok:true})});
+app.get('/api/admin/tweets',admin,(req,res)=>res.json({items:db.prepare('SELECT id,abs_id,verified,text,image_url,link_url,created_at FROM tweets ORDER BY id DESC LIMIT 500').all().map(x=>({...x,verified:!!x.verified}))}));
+app.post('/api/admin/tweets',admin,(req,res)=>{const text=String(req.body?.text||'').trim(),image=String(req.body?.image_url||'').trim(),link=String(req.body?.link_url||'').trim();if(!text&&!image)return res.status(400).json({error:'Add a post message or product image URL.'});if(image&&!/^https:\/\//i.test(image)&&!/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/i.test(image))return res.status(400).json({error:'Image must be an HTTPS URL or uploaded image.'});if(image.length>2200000)return res.status(413).json({error:'Image is too large; use an image under 1.5 MB.'});if(link&&!/^https:\/\//i.test(link))return res.status(400).json({error:'Product links must start with https://'});const info=db.prepare('INSERT INTO tweets(firebase_uid,abs_id,verified,text,image_url,link_url,created_at) VALUES(NULL,?,?,?,?,?,?)').run('ABS OFFICIAL',1,text,image,link,now());res.status(201).json({ok:true,id:String(info.lastInsertRowid)})});
+app.delete('/api/admin/tweets/:id',admin,(req,res)=>{const info=db.prepare('DELETE FROM tweets WHERE id=?').run(Number(req.params.id));if(!info.changes)return res.status(404).json({error:'Tweet not found.'});res.json({ok:true})});
 app.get('/api/ads',(req,res)=>{const stamp=now();res.json({items:db.prepare("SELECT id,title,text,badge,image,link,starts_at,ends_at FROM ads WHERE active=1 AND (starts_at IS NULL OR starts_at='' OR starts_at<=?) AND (ends_at IS NULL OR ends_at='' OR ends_at>=?) ORDER BY id DESC").all(stamp,stamp)});});
 app.get('/api/admin/ads',admin,(req,res)=>res.json({items:db.prepare('SELECT id,title,text,badge,image,link,active,starts_at,ends_at,created_at FROM ads ORDER BY id DESC').all().map(x=>({...x,active:!!x.active}))}));
 app.post('/api/admin/login',(req,res)=>{const {username,password}=req.body||{};if(username!==ADMIN_USER||password!==ADMIN_PASS)return res.status(401).json({error:'Invalid admin credentials'});res.json({token:jwt.sign({role:'admin'},JWT_SECRET,{expiresIn:'8h'})})});
