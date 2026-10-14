@@ -2,16 +2,6 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<script>
-/* In the installed Capacitor APK, open the login screen directly. Keep the public landing page on the website. */
-(function(){
-  try {
-    if (window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform()) {
-      document.documentElement.classList.add("abs-native-app");
-    }
-  } catch (_) {}
-})();
-</script>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <meta name="theme-color" content="#070b16">
 <meta name="description" content="ABS DASHBOARD — Track. Understand. Manage.">
@@ -40,12 +30,6 @@ window.ABS_FIREBASE_CONFIG = {
 <link rel="icon" type="image/png" href="./assets/abs-icon.png">
 <link rel="apple-touch-icon" href="./assets/abs-icon.png">
 <link rel="manifest" href="./manifest.json">
-
-<style>
-html.abs-native-app #landingScreen { display: none !important; }
-html.abs-native-app #authScreen { display: block !important; }
-html.abs-native-app #mainApp { display: none; }
-</style>
 </head>
 <body>
 <div id="app">
@@ -102,7 +86,7 @@ html.abs-native-app #mainApp { display: none; }
     <nav class="bottom-nav">
       <button data-tab="dashboard" class="nav-item active"><span>⌂</span><small>Dashboard</small></button>
       <button data-tab="explore" class="nav-item"><span>◈</span><small>Explore</small></button>
-      <button data-tab="ai" class="nav-item"><span>✦</span><small>AI</small></button>
+      <button data-tab="tweets" class="nav-item"><span>✎</span><small>ABS Tweet</small></button>
       <button data-tab="profile" class="nav-item"><span>◯</span><small>Profile</small></button>
     </nav>
   </section>
@@ -129,21 +113,6 @@ document.querySelectorAll(".bottom-nav .nav-item").forEach(function(btn){
 if("serviceWorker" in navigator){
   navigator.serviceWorker.register("sw.js").catch(()=>{});
 }
-</script>
-
-<script>
-(function(){
-  try {
-    if (window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform()) {
-      var landing = document.getElementById("landingScreen");
-      var auth = document.getElementById("authScreen");
-      var app = document.getElementById("mainApp");
-      if (landing) landing.classList.add("hidden");
-      if (auth) auth.classList.remove("hidden");
-      if (app) app.classList.add("hidden");
-    }
-  } catch (_) {}
-})();
 </script>
 </body>
 </html>
