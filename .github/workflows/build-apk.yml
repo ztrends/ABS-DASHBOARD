@@ -24,7 +24,7 @@ jobs:
           java-version: '21'
 
       - name: Install Capacitor
-        run: cd frontend && npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/assets @capacitor/browser @capacitor/filesystem @capacitor/share esbuild
+        run: cd frontend && npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/assets
 
       - name: Prepare web files
         run: |
@@ -36,24 +36,6 @@ jobs:
           done
           cp manifest.json www/manifest.json 2>/dev/null || true
           cp sw.js www/sw.js 2>/dev/null || true
-          cat > native-plugins-entry.js <<'JS'
-          import { Browser } from '@capacitor/browser';
-          import { Filesystem, Directory } from '@capacitor/filesystem';
-          import { Share } from '@capacitor/share';
-          window.ABSNativePlugins = { Browser, Filesystem, Directory, Share };
-          JS
-          npx esbuild native-plugins-entry.js --bundle --format=iife --platform=browser --outfile=www/native-plugins.js
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('www/index.html')
-          html = p.read_text()
-          # Set an explicit flag only in the packaged APK so native launch shows Login,
-          # while the public website continues showing its landing page.
-          marker = '<script>window.ABS_NATIVE_APP=true;window.ABS_APP_VERSION="1.0.${{ github.run_number }}";</script><script src="native-plugins.js"></script>'
-          if 'window.ABS_NATIVE_APP=true' not in html:
-              html = html.replace('</head>', marker + '\n</head>', 1)
-          p.write_text(html)
-          PY
 
       - name: Initialize Capacitor
         run: |
@@ -63,100 +45,6 @@ jobs:
           npx cap sync android
 
      
-      - name: Upgrade Android toolchain for AndroidX Browser 1.9
-        run: |
-          cd frontend/android
-          python3 - <<'PYFIX'
-          from pathlib import Path
-          import re
-
-          # AndroidX Browser 1.9 requires AGP >= 8.9.1 and compileSdk >= 36.
-          gradle_file = Path('build.gradle')
-          gradle_text = gradle_file.read_text()
-          gradle_text, agp_count = re.subn(
-              r"com\.android\.tools\.build:gradle:[0-9.]+",
-              "com.android.tools.build:gradle:8.9.1",
-              gradle_text, count=1
-          )
-          if agp_count != 1:
-              raise SystemExit('Could not find Android Gradle Plugin version in android/build.gradle')
-          gradle_file.write_text(gradle_text)
-
-          variables = Path('variables.gradle')
-          variables_text = variables.read_text()
-          variables_text, sdk_count = re.subn(
-              r"compileSdkVersion\s*=\s*\d+",
-              "compileSdkVersion = 36",
-              variables_text, count=1
-          )
-          if sdk_count != 1:
-              raise SystemExit('Could not find compileSdkVersion in android/variables.gradle')
-          variables.write_text(variables_text)
-
-          wrapper = Path('gradle/wrapper/gradle-wrapper.properties')
-          wrapper_text = wrapper.read_text()
-          wrapper_text, wrapper_count = re.subn(
-              r"gradle-[0-9.]+-(?:all|bin)\.zip",
-              "gradle-8.11.1-all.zip",
-              wrapper_text, count=1
-          )
-          if wrapper_count != 1:
-              raise SystemExit('Could not update Gradle wrapper distribution URL')
-          wrapper.write_text(wrapper_text)
-          PYFIX
-
-          SDKMANAGER="$(command -v sdkmanager || true)"
-          if [ -z "$SDKMANAGER" ] && [ -n "${ANDROID_HOME:-}" ]; then
-            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          fi
-          if [ ! -x "$SDKMANAGER" ]; then
-            echo "ERROR: Android sdkmanager was not found on the runner"
-            exit 1
-          fi
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
-
-      - name: Set APK version and optional stable signing
-        env:
-          ABS_KEYSTORE_BASE64: ${{ secrets.ABS_KEYSTORE_BASE64 }}
-          ABS_KEYSTORE_PASSWORD: ${{ secrets.ABS_KEYSTORE_PASSWORD }}
-          ABS_KEY_ALIAS: ${{ secrets.ABS_KEY_ALIAS }}
-          ABS_KEY_PASSWORD: ${{ secrets.ABS_KEY_PASSWORD }}
-          ABS_VERSION_CODE: ${{ github.run_number }}
-          ABS_VERSION_NAME: 1.0.${{ github.run_number }}
-        run: |
-          cd frontend
-          python3 - <<'PY'
-          import os, re, base64
-          from pathlib import Path
-          p = Path('android/app/build.gradle')
-          text = p.read_text()
-          version_code = os.environ['ABS_VERSION_CODE']
-          version_name = os.environ['ABS_VERSION_NAME']
-          text, code_n = re.subn(r'versionCode\s+\d+', f'versionCode {version_code}', text, count=1)
-          text, name_n = re.subn(r'versionName\s+["\'][^"\']*["\']', f'versionName "{version_name}"', text, count=1)
-          if code_n != 1 or name_n != 1:
-              raise SystemExit('Could not locate versionCode/versionName in generated Android app/build.gradle')
-          if os.environ.get('ABS_KEYSTORE_BASE64'):
-              required = ['ABS_KEYSTORE_PASSWORD', 'ABS_KEY_ALIAS', 'ABS_KEY_PASSWORD']
-              missing = [name for name in required if not os.environ.get(name)]
-              if missing:
-                  raise SystemExit('Stable signing requires GitHub Actions secrets: ' + ', '.join(missing))
-              key = Path('android/app/abs-release.jks')
-              key.write_bytes(base64.b64decode(os.environ['ABS_KEYSTORE_BASE64'], validate=True))
-              signing = '\n    signingConfigs {\n        absStable {\n            storeFile file("abs-release.jks")\n            storePassword System.getenv("ABS_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ABS_KEY_ALIAS")\n            keyPassword System.getenv("ABS_KEY_PASSWORD")\n        }\n    }\n'
-              text = text.replace('android {', 'android {' + signing, 1)
-              if 'buildTypes {' in text:
-                  text = text.replace('buildTypes {', 'buildTypes {\n        debug { signingConfig signingConfigs.absStable }', 1)
-              else:
-                  pos = text.rfind('}')
-                  text = text[:pos] + '\n    buildTypes { debug { signingConfig signingConfigs.absStable } }\n' + text[pos:]
-              print('Using the configured stable Android keystore.')
-          else:
-              print('::warning::ABS_KEYSTORE_BASE64 is not configured; this APK uses a generated debug signing key and may require reinstall instead of in-place update.')
-          p.write_text(text)
-          PY
-
       - name: Generate ABS Android launcher icon
         run: |
           cd frontend
@@ -191,27 +79,30 @@ jobs:
                   p.write_text(s[:i]+method+s[i:])
           PY
 
-      - name: Fix Kotlin dependency conflict
+      - name: Ensure Android and Maven Central repositories
         run: |
           cd frontend/android
-          python3 - <<'PY'
+          python3 - <<'PYFIX'
           from pathlib import Path
-          p=Path('app/build.gradle')
-          s=p.read_text()
-          block='''configurations.configureEach {
-              exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"
-              exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"
-          }
-          '''
-          if 'kotlin-stdlib-jdk8' not in s:
-              p.write_text(block+s)
-          PY
-
+          import re
+          p = Path('settings.gradle')
+          s = p.read_text()
+          # Add reliable Maven Central endpoints to dependency repositories, without changing plugin repositories.
+          repos = ['google()', 'mavenCentral()', 'maven { url = uri("https://repo1.maven.org/maven2") }', 'maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }']
+          if 'dependencyResolutionManagement' in s:
+              start = s.index('dependencyResolutionManagement')
+              before, tail = s[:start], s[start:]
+              m = re.search(r'repositories\s*\{', tail)
+              if m:
+                  pos = m.end()
+                  existing = tail[pos:pos+600]
+                  for line in reversed(repos):
+                      if line.strip() not in existing:
+                          tail = tail[:pos] + '\n        ' + line.strip() + tail[pos:]
+                  s = before + tail
+          p.write_text(s)
+          PYFIX
       - name: Build APK
-        env:
-          ABS_KEYSTORE_PASSWORD: ${{ secrets.ABS_KEYSTORE_PASSWORD }}
-          ABS_KEY_ALIAS: ${{ secrets.ABS_KEY_ALIAS }}
-          ABS_KEY_PASSWORD: ${{ secrets.ABS_KEY_PASSWORD }}
         run: cd frontend/android && chmod +x gradlew && ./gradlew clean assembleDebug
 
       - uses: actions/upload-artifact@v4
