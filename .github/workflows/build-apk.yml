@@ -102,6 +102,26 @@ jobs:
                   s = before + tail
           p.write_text(s)
           PYFIX
+      - name: Fix duplicate Kotlin JDK7/JDK8 classes
+        run: |
+          cd frontend/android
+          python3 - <<'PYFIX'
+          from pathlib import Path
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          block = '''
+          // Kotlin stdlib 1.8+ includes the JDK7/JDK8 classes; exclude legacy split artifacts.
+          configurations.configureEach {
+              exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk7"
+              exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib-jdk8"
+          }
+          '''
+          marker = 'module: "kotlin-stdlib-jdk7"'
+          if marker not in s:
+              s += "\n\n" + block
+              p.write_text(s)
+          PYFIX
+
       - name: Build APK
         run: cd frontend/android && chmod +x gradlew && ./gradlew clean assembleDebug
 
