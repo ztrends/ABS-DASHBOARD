@@ -29,10 +29,18 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      - name: Prepare and validate website artifact
+        run: |
+          test -f frontend/index.html
+          test -f frontend/css/style.css
+          test -f frontend/js/app.js
+          touch frontend/.nojekyll
+          echo "Website entry file and required assets are present."
+
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
-         path: './frontend'
+          path: './frontend'
 
       - name: Deploy to GitHub Pages
         id: deployment
