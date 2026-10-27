@@ -15,6 +15,7 @@
 .modal{position:fixed;inset:0;background:#0009;display:grid;place-items:center;padding:18px;z-index:20}.modalbox{width:min(500px,100%);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:20px}.modalhead{display:flex;justify-content:space-between;align-items:center}.close{background:none;border:0;color:var(--muted);font-size:24px}.msg{min-height:20px;margin-top:10px;font-size:13px}.preview{margin-top:10px;display:none}.preview img{width:100%;max-height:220px;object-fit:cover;border-radius:12px;border:1px solid var(--line)}
 .tabs{display:flex;gap:8px;overflow:auto;margin:8px 0 16px}.tab{white-space:nowrap}.section-title{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
 @media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.toprow{align-items:flex-start;flex-direction:column}.actions{width:100%}.actions .btn{flex:1}.wrap{width:min(100% - 20px,1180px)}}
+.support-request-admin-card{border:1px solid var(--line);border-radius:14px;padding:13px;margin-bottom:10px;background:var(--panel2)}.support-request-admin-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.support-request-admin-top .badge{flex:none}.support-request-admin-meta{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:9px 0;color:var(--muted);font-size:11px}.support-request-admin-meta a{color:#8374ff;font-weight:800;text-decoration:none}.support-request-admin-card p{font-size:12px;line-height:1.6;white-space:normal;overflow-wrap:anywhere;margin:10px 0}.support-request-admin-card .ad-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}.badge.danger{background:rgba(220,80,100,.12);color:#d65367}.badge.blue{background:rgba(99,91,219,.12);color:#8274ff}.badge.secondary{background:rgba(16,185,129,.12);color:#0d9d73}
 </style>
 </head>
 <body>
@@ -45,6 +46,7 @@
     <section class="panel"><div class="section-title"><h2>Registered Users</h2><button class="btn" onclick="openCreateUser()">+ Create Account</button></div><div id="users"></div></section>
     <section class="panel"><div class="section-title"><h2>Advertisements</h2><button class="btn" onclick="openAdModal()">+ Add Ad</button></div><div id="ads"></div></section>
   </div>
+  <section class="panel" style="margin:16px 0"><div class="section-title"><h2>Customer Support Requests</h2><span id="supportCountMini" class="muted">Requests from app users</span></div><p class="muted">Review the issue, call the user if needed, and update each request status.</p><div id="supportRequests"></div></section>
   <section class="panel" style="margin:16px 0"><div class="section-title"><h2>Feedback</h2></div><div id="feedback"></div></section>
   <section class="panel" style="margin:16px 0"><div class="section-title"><h2>Broadcast Notifications</h2><button class="btn" type="button" onclick="openNotificationModal()">+ Message All Users</button></div><p class="muted">Send an announcement to all signed-in ABS users. Active advertisements also appear automatically in their Notifications section.</p><div id="notifications"></div></section>
 </main>
@@ -54,6 +56,6 @@
   <div class="modalhead"><h2 id="modalTitle">Manage</h2><button class="close" onclick="closeModal()">×</button></div>
   <div id="modalBody"></div>
 </div></div>
-<script src="admin.js?v=20261027-notifications-1"></script>
+<script src="admin.js?v=20261027-customer-support-1"></script>
 </body>
 </html>
