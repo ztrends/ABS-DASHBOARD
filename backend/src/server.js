@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS feedback(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id
 CREATE TABLE IF NOT EXISTS ads(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,text TEXT,badge TEXT,image TEXT,link TEXT,active INTEGER DEFAULT 1,starts_at TEXT,ends_at TEXT,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
 CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,message TEXT NOT NULL,type TEXT NOT NULL DEFAULT 'announcement',link TEXT NOT NULL DEFAULT '',active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS support_requests(id INTEGER PRIMARY KEY AUTOINCREMENT,firebase_uid TEXT NOT NULL,abs_id TEXT NOT NULL DEFAULT '',name TEXT NOT NULL DEFAULT '',mobile TEXT NOT NULL,issue TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'open',created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
 `);
 // Safe migrations for existing Render SQLite databases.
 const adColumns = new Set(db.prepare('PRAGMA table_info(ads)').all().map(c=>c.name));
@@ -88,6 +89,34 @@ app.get('/api/loans',auth,(req,res)=>res.json({items:db.prepare('SELECT * FROM l
 app.post('/api/loans',auth,(req,res)=>{const x=req.body||{};if(!x.name)return res.status(400).json({error:'Loan name is required'});const info=db.prepare('INSERT INTO loans(user_id,name,principal,interest,emi,start_date,end_date,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run(req.user.id,x.name,Number(x.principal||0),Number(x.interest||0),Number(x.emi||0),x.start_date||'',x.end_date||'',x.status||'Active',now());res.status(201).json({item:db.prepare('SELECT * FROM loans WHERE id=?').get(info.lastInsertRowid)})});
 app.get('/api/summary',auth,(req,res)=>{const t=db.prepare(`SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) income,COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) expense,COUNT(*) entries FROM transactions WHERE user_id=?`).get(req.user.id);res.json({...t,net:t.income-t.expense})});
 app.post('/api/feedback',auth,(req,res)=>{const x=req.body||{};db.prepare('INSERT INTO feedback(user_id,name,mobile,type,rating,message,created_at) VALUES(?,?,?,?,?,?,?)').run(req.user.id,req.user.name,req.user.mobile,x.type||'Feedback',Number(x.rating||0),x.message||'',now());res.status(201).json({ok:true})});
+
+// Customer Support requests from Firebase-authenticated ABS app users.
+const SUPPORT_ISSUES=[
+  'Password Change / Login Issue',
+  'Income / Expense / Data Problem',
+  'Statement / PDF Download Problem',
+  'App Crash / Error',
+  'Profile / Photo Problem',
+  'Premium / Verification Request',
+  'Notifications / Update Problem',
+  'Request a Call',
+  'Feature Request / Suggestion',
+  'Other'
+];
+app.post('/api/support-requests',firebaseUserAuth,(req,res)=>{
+  const x=req.body||{};
+  let mobile=String(x.mobile||'').replace(/\D/g,'');
+  if(mobile.length===12&&mobile.startsWith('91'))mobile=mobile.slice(2);
+  const issue=String(x.issue||'').trim();
+  const description=String(x.description||'').trim();
+  if(!/^[6-9]\d{9}$/.test(mobile))return res.status(400).json({error:'Enter a valid 10-digit Indian mobile number.'});
+  if(!SUPPORT_ISSUES.includes(issue))return res.status(400).json({error:'Please choose a valid support issue.'});
+  if(description.length>1200)return res.status(400).json({error:'Description must be 1,200 characters or less.'});
+  const stamp=now();
+  const info=db.prepare('INSERT INTO support_requests(firebase_uid,abs_id,name,mobile,issue,description,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)')
+    .run(req.firebaseUser.uid,req.firebaseUser.absId||'',req.firebaseUser.name||'',mobile,issue,description,'open',stamp,stamp);
+  res.status(201).json({ok:true,id:Number(info.lastInsertRowid)});
+});
 // Notifications: broadcast admin notices to every authenticated ABS user; active ads appear here too.
 app.get('/api/notifications',firebaseUserAuth,(req,res)=>{
   const stamp=now();
@@ -227,6 +256,14 @@ app.patch('/api/admin/users/:id',admin,(req,res)=>{const {verified,premium,abs_i
 app.delete('/api/admin/users/:id',admin,(req,res)=>{db.prepare('DELETE FROM users WHERE id=?').run(req.params.id);res.json({ok:true})});
 app.post('/api/admin/users/:id/reset-password',admin,(req,res)=>{const p=String(req.body?.password||'');if(p.length<6)return res.status(400).json({error:'Password must be at least 6 characters'});db.prepare('UPDATE users SET password_hash=?,updated_at=? WHERE id=?').run(bcrypt.hashSync(p,12),now(),req.params.id);res.json({ok:true})});
 app.get('/api/admin/feedback',admin,(req,res)=>res.json({items:db.prepare('SELECT * FROM feedback ORDER BY id DESC').all()}));
+app.get('/api/admin/support-requests',admin,(req,res)=>res.json({items:db.prepare('SELECT id,firebase_uid,abs_id,name,mobile,issue,description,status,created_at,updated_at FROM support_requests ORDER BY id DESC LIMIT 1000').all()}));
+app.patch('/api/admin/support-requests/:id',admin,(req,res)=>{
+  const status=String(req.body?.status||'').trim();
+  if(!['open','in-progress','resolved'].includes(status))return res.status(400).json({error:'Choose open, in-progress or resolved.'});
+  const result=db.prepare('UPDATE support_requests SET status=?,updated_at=? WHERE id=?').run(status,now(),Number(req.params.id));
+  if(!result.changes)return res.status(404).json({error:'Support request not found.'});
+  res.json({ok:true});
+});
 app.post('/api/admin/ads',admin,(req,res)=>{const x=req.body||{};const info=db.prepare('INSERT INTO ads(title,text,badge,image,link,active,created_at) VALUES(?,?,?,?,?,?,?)').run(x.title||'',x.text||'',x.badge||'FEATURED',x.image||'',x.link||'',x.active===false?0:1,now());res.status(201).json({item:db.prepare('SELECT * FROM ads WHERE id=?').get(info.lastInsertRowid)})});
 app.patch('/api/admin/ads/:id',admin,(req,res)=>{const x=req.body||{};db.prepare('UPDATE ads SET title=COALESCE(?,title),text=COALESCE(?,text),badge=COALESCE(?,badge),image=COALESCE(?,image),link=COALESCE(?,link),active=COALESCE(?,active),starts_at=COALESCE(?,starts_at),ends_at=COALESCE(?,ends_at) WHERE id=?').run(x.title??null,x.text??null,x.badge??null,x.image??null,x.link??null,x.active==null?null:(x.active?1:0),x.starts_at??null,x.ends_at??null,req.params.id);res.json({ok:true})});
 app.delete('/api/admin/ads/:id',admin,(req,res)=>{db.prepare('DELETE FROM ads WHERE id=?').run(req.params.id);res.json({ok:true})});
