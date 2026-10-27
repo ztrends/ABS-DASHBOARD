@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="js/vendor/jspdf.umd.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';"></script>
 <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore-compat.js"></script>
@@ -26,7 +26,7 @@ window.ABS_FIREBASE_CONFIG = {
 };
 </script>
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=20261027-notifications-crop-pdf">
 <link rel="icon" type="image/png" href="./assets/abs-icon.png">
 <link rel="apple-touch-icon" href="./assets/abs-icon.png">
 <link rel="manifest" href="./manifest.json">
@@ -86,14 +86,14 @@ window.ABS_FIREBASE_CONFIG = {
     <nav class="bottom-nav">
       <button data-tab="dashboard" class="nav-item active"><span>⌂</span><small>Dashboard</small></button>
       <button data-tab="explore" class="nav-item"><span>◈</span><small>Explore</small></button>
-      <button data-tab="tweets" class="nav-item"><span>✎</span><small>ABS Tweet</small></button>
+      <button data-tab="notifications" class="nav-item" aria-label="Notifications"><span>♢</span><small>Notifications</small><b class="notification-badge hidden" aria-label="Unread notifications">0</b></button>
       <button data-tab="profile" class="nav-item"><span>◯</span><small>Profile</small></button>
     </nav>
   </section>
 </div>
 <div id="toast" class="toast"></div>
 <div id="modalRoot"></div>
-<script src="js/app.js"></script>
+<script src="js/app.js?v=20261027-notifications-crop-pdf"></script>
 <script>
 document.querySelectorAll(".bottom-nav .nav-item").forEach(function(btn){
   btn.addEventListener("click", function(){
