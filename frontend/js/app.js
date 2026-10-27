@@ -3,7 +3,7 @@ const EMPTY_DATA = () => ({income:[],expenses:[],loans:[],emi:[],people:[],ledge
 function readSession(){try{const raw=localStorage.getItem("abs_user");if(raw)return JSON.parse(raw)}catch(e){};try{const m=document.cookie.match(/(?:^|; )abs_session=([^;]+)/);if(m)return JSON.parse(decodeURIComponent(m[1]))}catch(e){};return null}
 function persistSession(user){localStorage.setItem("abs_user",JSON.stringify(user));document.cookie="abs_session="+encodeURIComponent(JSON.stringify(user))+"; path=/; max-age=31536000; SameSite=Lax"}
 function clearSession(){localStorage.removeItem("abs_user");document.cookie="abs_session=; path=/; max-age=0; SameSite=Lax"}
-const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("abs_theme")||"dark",data:null,admin:false,remoteAds:[],adsLoaded:false,adsLoading:false,adsFetchedAt:0};
+const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("abs_theme")||"dark",data:null,admin:false,remoteAds:[],adsLoaded:false,adsLoading:false,adsFetchedAt:0,notifications:[]};
 let userProfileUnsubscribe = null;
 const ABS_PUBLIC_API_BASE = "https://abs-dashboard-t7up.onrender.com/api";
 
@@ -491,7 +491,27 @@ $("#themeBtn").onclick=()=>{state.theme=state.theme==="dark"?"light":"dark";loca
 $("#refreshBtn").onclick=refreshAppData;
 function goTab(tab){try{state.tab=tab||"dashboard";document.querySelectorAll(".nav-item").forEach(x=>x.classList.toggle("active",x.dataset.tab===state.tab));render();}catch(err){console.error("ABS navigation error",err);if(state.tab==="profile")renderProfile();else toast("Unable to open this section. Please try again.")}}
 document.querySelectorAll(".nav-item").forEach(b=>{b.type="button";b.addEventListener("click",e=>{e.preventDefault();goTab(b.dataset.tab);});});
-function openAvatarPicker(){openModal("Profile Picture",`<div class="avatar-picker"><div class="avatar-upload-hero"><div class="avatar-upload-icon">📷</div><div><b>Update your profile photo</b><p class="muted">Upload a photo or choose an avatar below.</p></div></div><label class="upload-photo">📷 Upload Photo<input id="avatarFile" type="file" accept="image/*" hidden></label><p class="muted avatar-choice-label">Choose an avatar</p><div class="avatar-options big"><button type="button" onclick="setAvatar('👦')">👦</button><button type="button" onclick="setAvatar('👧')">👧</button><button type="button" onclick="setAvatar('👨')">👨</button><button type="button" onclick="setAvatar('👩')">👩</button><button type="button" onclick="setAvatar('🙂')">🙂</button></div></div>`);$("#avatarFile").onchange=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>{localStorage.setItem("abs_avatar",r.result);localStorage.removeItem("abs_avatar_emoji");closeModal();renderProfile();toast("Profile photo updated")};r.readAsDataURL(f)}}
+function openAvatarCrop(file,onSave){
+  if(!file||!String(file.type||'').startsWith('image/'))return toast('Please choose an image');
+  if(file.size>15*1024*1024)return toast('Please choose a photo smaller than 15 MB');
+  const reader=new FileReader();reader.onerror=()=>toast('Photo could not be read. Please try another image.');reader.onload=()=>{
+    const img=new Image();img.onerror=()=>toast('This image could not be opened.');img.onload=()=>{
+      const size=320;let zoom=1,panX=0,panY=0,drag=null;const clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
+      openModal('Adjust Profile Photo',`<div class="crop-editor"><p class="crop-editor-copy">Drag the photo to position it. Use zoom to adjust your face inside the circle.</p><div class="crop-stage"><canvas id="avatarCropCanvas" width="320" height="320" aria-label="Crop profile photo"></canvas></div><div class="crop-control"><label for="avatarCropZoom"><span>Zoom</span><b id="avatarCropZoomValue">100%</b></label><input id="avatarCropZoom" type="range" min="1" max="3" step="0.01" value="1"></div><div class="crop-actions"><button type="button" class="secondary" id="avatarCropCancel">CANCEL</button><button type="button" class="primary" id="avatarCropSave">USE PHOTO</button></div></div>`);
+      const canvas=$('#avatarCropCanvas'),ctx=canvas.getContext('2d'),zoomInput=$('#avatarCropZoom');
+      function geometry(outSize){const scale=Math.max(outSize/img.naturalWidth,outSize/img.naturalHeight)*zoom;const w=img.naturalWidth*scale,h=img.naturalHeight*scale,ratio=outSize/size;let x=(outSize-w)/2+panX*ratio,y=(outSize-h)/2+panY*ratio;x=clamp(x,outSize-w,0);y=clamp(y,outSize-h,0);return{x,y,w,h}}
+      function draw(){if(!canvas||!ctx)return;ctx.clearRect(0,0,size,size);ctx.fillStyle='#fff';ctx.fillRect(0,0,size,size);const g=geometry(size);ctx.drawImage(img,g.x,g.y,g.w,g.h);$('#avatarCropZoomValue').textContent=`${Math.round(zoom*100)}%`}
+      zoomInput.addEventListener('input',()=>{zoom=Number(zoomInput.value)||1;draw()});
+      canvas.addEventListener('pointerdown',e=>{e.preventDefault();drag={x:e.clientX,y:e.clientY,px:panX,py:panY};canvas.setPointerCapture?.(e.pointerId)});
+      canvas.addEventListener('pointermove',e=>{if(!drag)return;e.preventDefault();const rect=canvas.getBoundingClientRect();const sx=size/(rect.width||size),sy=size/(rect.height||size);panX=drag.px+(e.clientX-drag.x)*sx;panY=drag.py+(e.clientY-drag.y)*sy;const g=geometry(size);panX=clamp(panX,-Math.max(0,(g.w-size)/2),Math.max(0,(g.w-size)/2));panY=clamp(panY,-Math.max(0,(g.h-size)/2),Math.max(0,(g.h-size)/2));draw()});
+      ['pointerup','pointercancel','lostpointercapture'].forEach(ev=>canvas.addEventListener(ev,()=>{drag=null}));
+      $('#avatarCropCancel').onclick=()=>closeModal();
+      $('#avatarCropSave').onclick=()=>{const out=document.createElement('canvas');out.width=384;out.height=384;const octx=out.getContext('2d');octx.fillStyle='#fff';octx.fillRect(0,0,384,384);const g=geometry(384);octx.drawImage(img,g.x,g.y,g.w,g.h);const data=out.toDataURL('image/jpeg',0.84);try{localStorage.setItem('abs_avatar',data);localStorage.removeItem('abs_avatar_emoji');const hadCallback=typeof onSave==='function';if(hadCallback)onSave(data);closeModal();if(!hadCallback&&state.tab==='profile')renderProfile();toast('Profile photo updated')}catch(err){console.error('Saving cropped avatar failed',err);toast('Photo could not be saved. Please use a smaller image.')}};
+      draw();
+    };img.src=String(reader.result);
+  };reader.readAsDataURL(file);
+}
+function openAvatarPicker(){openModal("Profile Picture",`<div class="avatar-picker"><div class="avatar-upload-hero"><div class="avatar-upload-icon">📷</div><div><b>Update your profile photo</b><p class="muted">Upload a photo, crop it, or choose an avatar below.</p></div></div><label class="upload-photo">📷 Upload & Crop Photo<input id="avatarFile" type="file" accept="image/*" hidden></label><p class="muted avatar-choice-label">Choose an avatar</p><div class="avatar-options big"><button type="button" onclick="setAvatar('👦')">👦</button><button type="button" onclick="setAvatar('👧')">👧</button><button type="button" onclick="setAvatar('👨')">👨</button><button type="button" onclick="setAvatar('👩')">👩</button><button type="button" onclick="setAvatar('🙂')">🙂</button></div></div>`);$('#avatarFile').onchange=e=>{const f=e.target.files?.[0];if(f)openAvatarCrop(f)};}
 function setAvatar(v){localStorage.setItem("abs_avatar_emoji",v);localStorage.removeItem("abs_avatar");closeModal();renderProfile();toast("Avatar updated")}
 function toggleTheme(){state.theme=state.theme==="dark"?"light":"dark";localStorage.setItem("abs_theme",state.theme);setup();}
 function openProfileEdit(){
@@ -517,11 +537,8 @@ function openProfileEdit(){
   $("#profileEditBack").onclick=()=>renderProfile();
   $("#profilePhotoChoose").onclick=()=>$("#profilePhotoFile").click();
   $("#profilePhotoFile").onchange=e=>{
-    const f=e.target.files?.[0]; if(!f)return;
-    if(!f.type.startsWith("image/"))return toast("Please choose an image");
-    const r=new FileReader();
-    r.onload=()=>{localStorage.setItem("abs_avatar",r.result);localStorage.removeItem("abs_avatar_emoji");$("#profilePhotoChoose").innerHTML=`<img src="${esc(r.result)}" alt="Profile">`;toast("Profile photo selected")};
-    r.readAsDataURL(f);
+    const f=e.target.files?.[0];if(!f)return;
+    openAvatarCrop(f,data=>{$("#profilePhotoChoose").innerHTML=`<img src="${esc(data)}" alt="Profile">`});
   };
   $("#editProfilePage").onsubmit=async e=>{
   e.preventDefault();
@@ -614,18 +631,48 @@ function openPassword(){
 }
 function exportData(){exportPDF()}
 const ABS_APP_DOWNLOAD_URL="https://github.com/ztrends/ABS-DASHBOARD/releases/latest/download/app-debug.apk";
-async function absFirebaseToken(){const u=typeof firebase!=="undefined"?firebase.auth().currentUser:null;if(!u)throw new Error("Please login again to use ABS Tweet.");return await u.getIdToken();}
-function absTweetCard(t,own=false){const id=escAttr(t.id);const verified=t.verified?'<span class="verified-badge" aria-label="Verified"><svg viewBox="0 0 24 24"><path d="M7 12.5l3.1 3.1L17.5 8.5"/></svg></span>':'';return `<article class="abs-tweet-card"><div class="abs-tweet-head"><div class="abs-tweet-avatar">${verified?'<span>✓</span>':'A'}</div><div><b>${esc(t.abs_id||'ABS USER')}${verified}</b><small>${esc(new Date(t.created_at||Date.now()).toLocaleString('en-IN'))}</small></div>${own?`<button class="tweet-delete" type="button" data-delete-tweet="${id}">Delete</button>`:''}</div>${t.text?`<p class="abs-tweet-text">${esc(t.text).replace(/\n/g,'<br>')}</p>`:''}${t.image_url?`<a class="abs-tweet-image-link" href="${escAttr(t.link_url||t.image_url)}" target="_blank" rel="noopener"><img src="${escAttr(t.image_url)}" alt="Tweet image" loading="lazy"></a>`:''}${t.link_url?`<a class="abs-tweet-link" href="${escAttr(t.link_url)}" target="_blank" rel="noopener">↗ Open link</a>`:''}<div class="abs-tweet-actions"><button type="button" data-share-tweet="${id}">↗ Share</button></div></article>`}
-async function fetchABSTweets(mine=false){const token=await absFirebaseToken();const url=ABS_PUBLIC_API_BASE+'/tweets'+(mine?'?mine=1':'');const r=await fetch(url,{headers:{Authorization:'Bearer '+token,Accept:'application/json'},cache:'no-store'});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Tweets could not be loaded');return Array.isArray(d.items)?d.items:[]}
-function renderTweets(mine=false){document.body.classList.remove('ai-open');const screen=$('#screen');if(!screen)return;screen.innerHTML=`<div class="page-title">${mine?'My ABS Tweets':'ABS Tweet'}</div><p class="page-sub">Share an update with the ABS community. Only your ABS ID is shown.</p>${mine?'<button type="button" class="primary full" id="backToFeed">← All ABS Tweets</button>':''}<section class="panel abs-tweet-compose"><div class="abs-tweet-compose-title"><b>${mine?'Post a new Tweet':'Share with ABS users'}</b><small>Keep it respectful. Maximum 500 characters.</small></div><form id="absTweetForm"><textarea id="absTweetText" maxlength="500" placeholder="What would you like to share?" required></textarea><div class="abs-tweet-compose-foot"><span id="absTweetCount">0 / 500</span><button class="primary" type="submit">Post Tweet ↑</button></div></form></section><div id="absTweetFeed" class="abs-tweet-feed"><div class="empty-state large"><span>◌</span><b>Loading ABS Tweets…</b></div></div>`;
-if(mine)$('#backToFeed')?.addEventListener('click',()=>{state.tab='tweets';render()});const ta=$('#absTweetText');ta?.addEventListener('input',()=>$('#absTweetCount').textContent=`${ta.value.length} / 500`);$('#absTweetForm')?.addEventListener('submit',async e=>{e.preventDefault();const text=ta.value.trim();if(!text)return;const btn=e.target.querySelector('button[type=submit]');btn.disabled=true;try{const token=await absFirebaseToken();const r=await fetch(ABS_PUBLIC_API_BASE+'/tweets',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({text})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Tweet post failed');toast('Tweet posted');renderTweets(mine)}catch(err){toast(err.message||'Tweet post failed')}finally{btn.disabled=false}});
-fetchABSTweets(mine).then(items=>{const feed=$('#absTweetFeed');if(!feed)return;feed.innerHTML=items.length?items.map(t=>absTweetCard(t,mine?true:false)).join(''):'<div class="empty-state large"><span>✎</span><b>No tweets yet</b><p>Be the first to post on ABS Tweet.</p></div>';feed.querySelectorAll('[data-delete-tweet]').forEach(b=>b.addEventListener('click',async()=>{if(!confirm('Delete this tweet?'))return;try{const token=await absFirebaseToken();const r=await fetch(ABS_PUBLIC_API_BASE+'/tweets/'+encodeURIComponent(b.dataset.deleteTweet),{method:'DELETE',headers:{Authorization:'Bearer '+token}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Delete failed');renderTweets(mine);toast('Tweet deleted')}catch(e){toast(e.message)}}));feed.querySelectorAll('[data-share-tweet]').forEach(b=>b.addEventListener('click',()=>{const t=items.find(x=>String(x.id)===b.dataset.shareTweet);if(t)shareABSTweet(t)}))}).catch(err=>{const feed=$('#absTweetFeed');if(feed)feed.innerHTML=`<div class="empty-state large"><span>!</span><b>ABS Tweet could not load</b><p>${esc(err.message)}. Backend deployment and Firebase Admin configuration may need checking.</p></div>`})}
-function openMyTweets(){state.tab='profile';renderTweets(true)}
+async function absFirebaseToken(){const u=typeof firebase!=="undefined"?firebase.auth().currentUser:null;if(!u)throw new Error("Please login again to use ABS Dashboard.");return await u.getIdToken();}
+function notificationSeenKey(){return `abs_notifications_seen_${state.user?.mobile||'guest'}`}
+function getSeenNotificationIds(){try{return JSON.parse(localStorage.getItem(notificationSeenKey())||'[]').map(String)}catch(_){return[]}}
+function setSeenNotificationIds(ids){try{localStorage.setItem(notificationSeenKey(),JSON.stringify([...new Set(ids.map(String))].slice(-500)))}catch(_){}}
+function updateNotificationBadge(items=state.notifications){
+  const button=document.querySelector('.bottom-nav [data-tab="notifications"]');if(!button)return;
+  let badge=button.querySelector('.notification-badge');
+  if(!badge){badge=document.createElement('b');badge.className='notification-badge hidden';badge.setAttribute('aria-label','Unread notifications');button.appendChild(badge)}
+  const seen=new Set(getSeenNotificationIds());const count=(items||[]).filter(x=>!seen.has(String(x.id))).length;
+  badge.textContent=count>9?'9+':String(count);badge.classList.toggle('hidden',count===0);
+}
+async function fetchABSNotifications(){
+  const token=await absFirebaseToken();
+  const r=await fetch(ABS_PUBLIC_API_BASE+'/notifications',{headers:{Authorization:'Bearer '+token,Accept:'application/json'},cache:'no-store'});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(d.error||'Notifications could not be loaded.');
+  return Array.isArray(d.items)?d.items:[];
+}
+async function refreshNotificationBadge(){
+  if(!state.user||!firebaseAdminReady()||!firebase.auth().currentUser)return;
+  try{state.notifications=await fetchABSNotifications();updateNotificationBadge(state.notifications)}catch(err){console.warn('ABS notifications refresh failed:',err.message)}
+}
+function renderNotifications(){
+  document.body.classList.remove('ai-open');const screen=$('#screen');if(!screen)return;
+  screen.innerHTML=`<div class="page-title">Notifications</div><p class="page-sub">Important ABS updates and active offers, all in one place.</p><div id="notificationFeed" class="notification-feed"><div class="empty-state large"><span>♢</span><b>Loading notifications…</b></div></div>`;
+  fetchABSNotifications().then(items=>{
+    state.notifications=items;const seenBefore=new Set(getSeenNotificationIds());
+    const feed=$('#notificationFeed');if(!feed)return;
+    feed.innerHTML=items.length?items.map(n=>{
+      const unread=!seenBefore.has(String(n.id));const icon=n.type==='ad'?'✦':n.type==='important'?'!':'♢';
+      const date=n.created_at?new Date(n.created_at).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'';
+      const image=n.image?`<img class="notification-image" src="${escAttr(n.image)}" alt="Notification image" loading="lazy">`:'';
+      const link=n.link?`<a class="notification-open-link" href="${escAttr(n.link)}" target="_blank" rel="noopener">Open details ↗</a>`:'';
+      return `<article class="notification-card ${unread?'unread':''}"><div class="notification-card-head"><span class="notification-icon">${icon}</span><div class="notification-card-title"><b>${esc(n.title||'ABS Update')}</b><small>${esc(date)} · ${n.type==='ad'?'Advertisement':n.type==='important'?'Important':'ABS Update'}</small></div>${unread?'<span class="notification-new">NEW</span>':''}</div>${n.message?`<p>${esc(n.message).replace(/\n/g,'<br>')}</p>`:''}${image}${link}</article>`;
+    }).join(''):`<div class="empty-state large"><span>♢</span><b>You’re all caught up</b><p>Admin announcements and active advertisements will appear here.</p></div>`;
+    setSeenNotificationIds([...getSeenNotificationIds(),...items.map(x=>String(x.id))]);updateNotificationBadge(items);renderFooter();
+  }).catch(err=>{const feed=$('#notificationFeed');if(feed)feed.innerHTML=`<div class="empty-state large"><span>!</span><b>Notifications unavailable</b><p>${esc(err.message||'Please sign in again and try refreshing.')}</p><button class="primary" type="button" onclick="renderNotifications()">TRY AGAIN</button></div>`;renderFooter()});
+}
 function absShareBody(payload){const text=String(payload.text||'').trim(),url=String(payload.url||'').trim();return [text,url&& !text.includes(url)?url:''].filter(Boolean).join('\n')}
 async function copyABSShareText(text){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);return true}const input=document.createElement('textarea');input.value=text;input.style.position='fixed';input.style.opacity='0';document.body.appendChild(input);input.select();const ok=document.execCommand('copy');input.remove();return ok}catch(_){return false}}
-function showABSShareFallback(payload){const body=absShareBody(payload);const encoded=encodeURIComponent(body);const wa='https://wa.me/?text='+encoded;openModal('Share ABS',`<div class="workspace-hero"><div class="workspace-icon">↗</div><div><div class="eyebrow">SHARE WITH FRIENDS</div><h3>${esc(payload.title||'ABS DASHBOARD')}</h3><p>Choose WhatsApp, Instagram, or copy the message.</p></div></div><a class="primary full abs-share-choice" href="${escAttr(wa)}" target="_blank" rel="noopener">Share to WhatsApp</a><button type="button" class="secondary full abs-share-choice" id="absShareInstagram">Open Instagram</button><button type="button" class="secondary full abs-share-choice" id="absShareCopy">Copy message</button>`);document.getElementById('absShareInstagram')?.addEventListener('click',async()=>{window.open('https://www.instagram.com/direct/inbox/','_blank','noopener');await copyABSShareText(body);toast('Message copied. Paste it into Instagram chat.');});document.getElementById('absShareCopy')?.addEventListener('click',async()=>{const ok=await copyABSShareText(body);toast(ok?'Share message copied':'Could not copy message');});}
-async function shareABSContent(payload){const title=String(payload.title||'ABS DASHBOARD'),text=String(payload.text||''),url=String(payload.url||'');try{if(window.AbsShare&&typeof window.AbsShare.share==='function'){window.AbsShare.share(title,text,url);return}if(typeof navigator.share==='function'){await navigator.share({title,text,url:url||undefined});return}showABSShareFallback({title,text,url})}catch(e){if(e?.name==='AbortError')return;console.error('ABS share failed',e);showABSShareFallback({title,text,url})}}
-async function shareABSTweet(t){const text=`${t.abs_id||'ABS USER'} on ABS Tweet\n${t.text||''}`;await shareABSContent({title:'ABS Tweet',text,url:t.link_url||'https://ztrends.github.io/ABS-DASHBOARD/'})}
+function showABSShareFallback(payload){const body=absShareBody(payload);const encoded=encodeURIComponent(body);const wa='https://wa.me/?text='+encoded;openModal('Share ABS',`<div class="workspace-hero"><div class="workspace-icon">↗</div><div><div class="eyebrow">SHARE WITH FRIENDS</div><h3>${esc(payload.title||'ABS DASHBOARD')}</h3><p>Choose WhatsApp, Instagram, or copy the message.</p></div></div><a class="primary full abs-share-choice" href="${escAttr(wa)}" target="_blank" rel="noopener">Share to WhatsApp</a><a class="secondary full abs-share-choice" href="https://www.instagram.com/direct/inbox/" target="_blank" rel="noopener" id="absShareInstagram">Open Instagram messages</a><button type="button" class="secondary full abs-share-choice" id="absShareCopy">Copy message</button>`);document.getElementById('absShareInstagram')?.addEventListener('click',async()=>{await copyABSShareText(body);toast('Message copied. Paste it into Instagram chat.');});document.getElementById('absShareCopy')?.addEventListener('click',async()=>{const ok=await copyABSShareText(body);toast(ok?'Share message copied':'Could not copy message');});}
+async function shareABSContent(payload){const title=String(payload.title||'ABS DASHBOARD'),text=String(payload.text||''),url=String(payload.url||'');try{if(window.AbsShare&&typeof window.AbsShare.share==='function'){const result=window.AbsShare.share(title,text,url);if(result&&typeof result.then==='function')await result;return}if(typeof navigator.share==='function'){await navigator.share({title,text,url:url||undefined});return}showABSShareFallback({title,text,url})}catch(e){if(e?.name==='AbortError')return;console.error('ABS share failed',e);showABSShareFallback({title,text,url})}}
 async function shareABSApp(){await shareABSContent({title:'ABS DASHBOARD',text:'Download ABS DASHBOARD — personal finance, income, expenses, loans and EMI in one app.',url:ABS_APP_DOWNLOAD_URL})}
 function openProfileChat(){state.profileChatReturnTab='profile';state.tab='ai';renderAI();renderFooter()}
 function updateABSApp(){openModal('Update ABS DASHBOARD',`<div class="workspace-hero"><div class="workspace-icon">⇩</div><div><div class="eyebrow">LATEST ANDROID VERSION</div><h3>Download current ABS app</h3><p>The latest public APK release will open. After download, tap the APK file and confirm Install. Android may ask you to allow installs from your browser.</p></div></div><a class="primary full" style="display:block;text-align:center;text-decoration:none;padding:14px;border-radius:12px" href="${ABS_APP_DOWNLOAD_URL}" target="_blank" rel="noopener">DOWNLOAD LATEST APK</a>`)}
@@ -642,7 +689,7 @@ function renderProfile(){
     screenEl.innerHTML=`<div class="page-title">Profile</div><p class="page-sub">Account, security and preferences.</p>
       <section class="profile-premium profile-identity-row"><div class="profile-avatar">${avatar?`<img src="${esc(avatar)}" alt="Profile">`:esc(emoji)}</div><div class="profile-identity"><div class="profile-name">${esc(state.user.name)} ${verified?'<span class="verified-badge" aria-label="Verified"><svg viewBox="0 0 24 24"><path d="M7 12.5l3.1 3.1L17.5 8.5"/></svg></span>':''}</div><div class="profile-mobile">${esc(currentUserRecord()?.absId||state.user.absId||"")}</div></div><button type="button" class="profile-edit-inline" id="profileEditBtn" onclick="openProfileEdit(); return false;">Edit Profile <span>›</span></button></section>
       ${premiumCard}
-      <div class="profile-social-actions"><button type="button" class="primary" onclick="openMyTweets()">✎ My Tweets</button><button type="button" class="secondary" onclick="openProfileChat()">▤ Chat</button><button type="button" class="secondary" onclick="shareABSApp()">↗ Share App</button><button type="button" class="secondary" onclick="updateABSApp()">⇩ Update</button></div>
+      <div class="profile-social-actions"><button type="button" class="primary" onclick="openProfileChat()">▤ Chat</button><button type="button" class="secondary" onclick="shareABSApp()">↗ Share App</button><button type="button" class="secondary" onclick="updateABSApp()">⇩ Update</button></div>
       <div class="menu">
         <button type="button" onclick="openPassword()"><span>🔒 Change Password</span><span>›</span></button>
         <button type="button" data-profile-action="theme"><span>◐ Theme</span><span>${esc(state.theme)}</span></button>
@@ -667,7 +714,7 @@ function renderProfile(){
   }
 }
 
-function render(){document.body.classList.remove("ai-open");if(state.tab==="dashboard")renderDashboard();if(state.tab==="explore")renderExplore();if(state.tab==="tweets")renderTweets(false);if(state.tab==="ai")renderTweets(false);if(state.tab==="profile")renderProfile();renderFooter()}
+function render(){document.body.classList.remove("ai-open");if(state.tab==="dashboard")renderDashboard();if(state.tab==="explore")renderExplore();if(state.tab==="notifications")renderNotifications();if(state.tab==="ai")renderAI();if(state.tab==="profile")renderProfile();renderFooter()}
 function renderFooter(){const screen=$("#screen");if(!screen)return;screen.querySelector(".app-footer")?.remove();screen.insertAdjacentHTML("beforeend",`<footer class="app-footer">© 2026 ABS DASHBOARD. All Rights Reserved. <span>Riyaz Dev</span></footer>`)}
 function metric(icon,label,value,sub){return `<div class="metric premium-metric"><div class="label">${icon} ${esc(label)}</div><div class="value">${money(value)}</div><div class="trend">${esc(sub||"")}</div></div>`}
 function monthKey(v){const d=new Date(v);if(isNaN(d))return null;return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}
@@ -739,31 +786,20 @@ function openStatement(){
 }
 async function downloadPdfDocument(doc, filename){
   try{
-    const blob=doc.output('blob');
-    if(!blob || !blob.size) throw new Error('PDF file is empty.');
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url; a.download=filename; a.style.display='none';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    // Some mobile browsers ignore the download attribute for Blob URLs.
-    setTimeout(()=>{
-      if(document.visibilityState==='visible'){
-        const fallback=document.createElement('a');
-        fallback.href=url; fallback.target='_blank'; fallback.rel='noopener';
-        fallback.textContent='Open PDF'; fallback.style.cssText='position:fixed;left:-9999px;';
-        document.body.appendChild(fallback);
-        // Do not force a second tab unless the browser reports a likely blocked download.
-        fallback.remove();
-      }
-      URL.revokeObjectURL(url);
-    },60000);
-    toast('Statement PDF generated. Check your Downloads folder.');
-  }catch(err){
-    console.error('ABS PDF download failed:',err);
-    toast('PDF download failed. Please try again or use your browser menu.');
-  }
+    if(window.AbsFile&&typeof window.AbsFile.savePdfBase64==='function'){
+      const dataUri=doc.output('datauristring');const base64=dataUri.slice(dataUri.indexOf(',')+1);
+      const saved=window.AbsFile.savePdfBase64(base64,filename);
+      if(saved==='OK'){toast('PDF saved to your Downloads folder.');return}
+      console.warn('Native PDF save bridge returned:',saved);
+    }
+    const blob=doc.output('blob');if(!blob||!blob.size)throw new Error('PDF file is empty.');
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.style.display='none';document.body.appendChild(a);a.click();a.remove();
+    if(isABSNativeApp()){
+      toast('PDF created. If it did not save automatically, use the browser menu to download it.',5000);
+      setTimeout(()=>{try{window.open(url,'_system')}catch(_){}},300);
+    }else toast('Statement PDF generated. Check your Downloads folder.');
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+  }catch(err){console.error('ABS PDF download failed:',err);toast('PDF download failed. Please try again.',4500)}
 }
 function exportStatementPDF(filter='all',from='',to=''){
  if(!window.jspdf?.jsPDF)return toast('PDF engine is loading — try again');
@@ -895,12 +931,13 @@ async function logout(){
 }
 function openModal(title,body){$("#modalRoot").innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><h2>${esc(title)}</h2><button class="close" onclick="closeModal()">×</button></div>${body}</div></div>`}
 function closeModal(){$("#modalRoot").innerHTML=""}
-window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=openHistory;window.addCategory=addCategory;window.removeCategory=removeCategory;window.editHistoryEntry=editHistoryEntry;window.exportPDF=exportPDF;window.openFeature=openFeature;window.openEditRecords=openEditRecords;window.closeModal=closeModal;window.renderDashboard=renderDashboard;window.setChartRange=setChartRange;window.openProfileEdit=openProfileEdit;window.openPassword=openPassword;window.toggleTheme=toggleTheme;window.exportData=exportData;window.openAvatarPicker=openAvatarPicker;window.setAvatar=setAvatar;window.logout=logout;window.openPeople=openPeople;window.openPersonForm=openPersonForm;window.openLedger=openLedger;window.openLedgerForm=openLedgerForm;window.processBulkImport=processBulkImport;window.downloadBulkTemplate=downloadBulkTemplate;window.resetFinancialData=resetFinancialData;window.openStatement=openStatement;window.exportStatementPDF=exportStatementPDF;window.requestPremium=requestPremium;window.refreshAppData=refreshAppData;window.goTab=goTab;window.openProfileChat=openProfileChat;window.shareABSApp=shareABSApp;window.shareABSTweet=shareABSTweet;window.updateABSApp=updateABSApp;
+window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=openHistory;window.addCategory=addCategory;window.removeCategory=removeCategory;window.editHistoryEntry=editHistoryEntry;window.exportPDF=exportPDF;window.openFeature=openFeature;window.openEditRecords=openEditRecords;window.closeModal=closeModal;window.renderDashboard=renderDashboard;window.setChartRange=setChartRange;window.openProfileEdit=openProfileEdit;window.openPassword=openPassword;window.toggleTheme=toggleTheme;window.exportData=exportData;window.openAvatarPicker=openAvatarPicker;window.setAvatar=setAvatar;window.logout=logout;window.openPeople=openPeople;window.openPersonForm=openPersonForm;window.openLedger=openLedger;window.openLedgerForm=openLedgerForm;window.processBulkImport=processBulkImport;window.downloadBulkTemplate=downloadBulkTemplate;window.resetFinancialData=resetFinancialData;window.openStatement=openStatement;window.exportStatementPDF=exportStatementPDF;window.requestPremium=requestPremium;window.refreshAppData=refreshAppData;window.goTab=goTab;window.openProfileChat=openProfileChat;window.shareABSApp=shareABSApp;window.updateABSApp=updateABSApp;window.renderNotifications=renderNotifications;
 setup();
 if(firebaseAdminReady()){
   firebase.auth().onAuthStateChanged(async user=>{
     if(user && state.user && state.user.uid===user.uid){
       watchUserProfile(user);
+      refreshNotificationBadge();
       return;
     }
     stopUserProfileWatch();
@@ -919,7 +956,7 @@ if(firebaseAdminReady()){
   });
 }
 // Keep dashboard banners in sync with the central admin API while the page stays open.
-setInterval(()=>{if(!document.hidden&&state.user&&state.tab==="dashboard")loadServerAds()},30000);
+setInterval(()=>{if(document.hidden||!state.user)return;if(state.tab==="dashboard")loadServerAds();if(state.tab==="notifications")renderNotifications();else refreshNotificationBadge()},60000);
 
 /* ABS i18n expansion: Hindi translates the app UI while the top greeting and user name stay English. */
 Object.assign(window.HI_UI || (window.HI_UI = {}),{
@@ -929,6 +966,6 @@ Object.assign(window.HI_UI || (window.HI_UI = {}),{
   "Record money that came in":"आई हुई रकम दर्ज करें","When did you receive it?":"पैसा कब मिला?","Income Type":"आय का प्रकार","Add a short note":"छोटा नोट जोड़ें","Amount (₹)":"राशि (₹)","Enter amount":"राशि दर्ज करें","Payment Mode":"पेमेंट मोड","Record where your money went":"खर्च की गई रकम दर्ज करें","When was this paid?":"यह भुगतान कब हुआ?","What was it for?":"यह किसके लिए था?","Create a clear repayment plan":"स्पष्ट भुगतान योजना बनाएं","Loan Name":"लोन का नाम","e.g. Home Loan":"जैसे होम लोन","Loan Type":"लोन का प्रकार","Personal Loan":"पर्सनल लोन","Home Loan":"होम लोन","Vehicle Loan":"व्हीकल लोन","Education Loan":"एजुकेशन लोन","Business Loan":"बिज़नेस लोन","Lender / Bank":"लेंडर / बैंक","Bank or lender name":"बैंक या लेंडर का नाम","Principal (₹)":"मूलधन (₹)","Original loan amount":"मूल लोन राशि","Interest Rate %":"ब्याज दर %","Annual interest rate":"वार्षिक ब्याज दर","Tenure (months)":"अवधि (महीने)","Total months":"कुल महीने","Monthly EMI (₹)":"मासिक EMI (₹)","EMI amount":"EMI राशि","EMI Start Date":"EMI शुरू होने की तारीख","When EMI begins":"EMI कब शुरू होगी","Record a repayment":"भुगतान दर्ज करें","Payment Date":"भुगतान की तारीख","When was EMI paid?":"EMI कब चुकाई गई?","Optional note":"वैकल्पिक नोट","Saved successfully":"सफलतापूर्वक सेव हुआ","Add Person":"व्यक्ति जोड़ें","Person Name":"व्यक्ति का नाम","Relation":"रिश्ता","Person saved":"व्यक्ति सेव हो गया","Add Lena / Dena":"लेना / देना जोड़ें","Lena / Dena Ledger":"लेना / देना लेजर","Person":"व्यक्ति","Type":"प्रकार","Date":"तारीख","Description":"विवरण","SAVE ENTRY":"एंट्री सेव करें","Lena — I will receive":"लेना — मुझे मिलेगा","Dena — I will pay":"देना — मुझे देना है","Received — payment came back":"मिला — भुगतान वापस आया","Paid — I paid the person":"दिया — मैंने भुगतान किया","Ledger updated":"लेजर अपडेट हो गया",
   "Bulk Data Import":"बल्क डेटा इंपोर्ट","Add many old records at once":"एक साथ कई पुराने रिकॉर्ड जोड़ें","IMPORT DATA":"डेटा इंपोर्ट करें","Existing records are kept. Imported records are added to them.":"मौजूदा रिकॉर्ड सुरक्षित रहेंगे। इंपोर्ट किए गए रिकॉर्ड उनमें जोड़ दिए जाएंगे।","Paste CSV data first":"पहले CSV डेटा पेस्ट करें","CSV needs a header and at least one row":"CSV में हेडर और कम से कम एक रो होना चाहिए","imported":"इंपोर्ट हुए","skipped":"स्किप हुए","Category already exists":"कैटेगरी पहले से मौजूद है","Category added":"कैटेगरी जोड़ दी गई","Category removed":"कैटेगरी हटा दी गई","Default category cannot be removed":"डिफ़ॉल्ट कैटेगरी हटाई नहीं जा सकती","Edit Records":"रिकॉर्ड एडिट करें","Correct saved income, expense & ledger entries":"सेव किए गए आय, खर्च और लेजर रिकॉर्ड सुधारें","Record not found":"रिकॉर्ड नहीं मिला","Entry updated":"एंट्री अपडेट हो गई",
   "Filter by date and export a clean statement":"तारीख के अनुसार फ़िल्टर करें और साफ स्टेटमेंट एक्सपोर्ट करें","Date ·":"तारीख ·","to":"से","Generated ·":"बनाया गया ·","Period ·":"अवधि ·","Account ·":"अकाउंट ·","No transactions recorded yet.":"अभी कोई ट्रांज़ैक्शन रिकॉर्ड नहीं है।","TRANSACTION DETAIL":"ट्रांज़ैक्शन विवरण","STATEMENT TOTALS":"स्टेटमेंट कुल","ACCOUNT OVERVIEW":"अकाउंट सारांश","MONEY MOVEMENT":"पैसे का लेन-देन","CATEGORY":"कैटेगरी","COUNT":"गिनती","AMOUNT":"राशि","CREDIT":"जमा","DEBIT":"निकासी","BALANCE":"बैलेंस","TRANSACTION DETAIL · CONTINUED":"ट्रांज़ैक्शन विवरण · जारी","Total Expenses":"कुल खर्च","Net Savings":"कुल बचत","EMI Paid":"भरी गई EMI","To Receive":"मिलना है","To Pay":"देना है","Income, expense & Lena/Dena report":"आय, खर्च और लेना/देना रिपोर्ट","Income, expenses, payment modes and Lena/Dena balances":"आय, खर्च, पेमेंट मोड और लेना/देना बैलेंस",
-  "Share your experience, report a problem or suggest a feature":"अपना अनुभव साझा करें, समस्या बताएं या फीचर सुझाएं","Learn every feature":"हर फीचर के बारे में जानें","Personalize the app":"ऐप को अपनी पसंद के अनुसार बनाएं","Add your own income & expense categories":"अपनी आय और खर्च की कैटेगरी जोड़ें","View all income, expense & ledger records":"सभी आय, खर्च और लेजर रिकॉर्ड देखें","Monthly spending limits":"मासिक खर्च की सीमाएं","Jobs & salary history":"नौकरी और सैलरी इतिहास","Add Loan":"लोन जोड़ें","Principal, interest & tenure":"मूलधन, ब्याज और अवधि","Add EMI":"EMI जोड़ें","Record repayment":"भुगतान दर्ज करें","Loan Schedule":"लोन शेड्यूल","Principal & interest timeline":"मूलधन और ब्याज की समयरेखा","Name, phone & balances":"नाम, फोन और बैलेंस","Lena / Dena — receive & pay":"लेना / देना — प्राप्त और भुगतान","AI":"AI","Ask ABS AI anything about your finances...":"अपने फाइनेंस के बारे में ABS AI से कुछ भी पूछें...","Personal Finance Copilot":"पर्सनल फाइनेंस कोपायलट","SUGGESTED NEXT":"अगला सुझाव","NEW TOPIC":"नया विषय","More Services":"और सेवाएं","this month":"इस महीने","Please type a question.":"कृपया कोई सवाल लिखें।","How much have I spent?":"मैंने कितना खर्च किया है?","How much income do I have?":"मेरी आय कितनी है?","What are my total savings?":"मेरी कुल बचत कितनी है?","How much EMI have I paid?":"मैंने कितनी EMI चुकाई है?","How much do I need to receive?":"मुझे कितना पैसा मिलना है?","How much do I need to pay?":"मुझे कितना पैसा देना है?","How do I download my statement?":"मैं अपना स्टेटमेंट कैसे डाउनलोड करूं?","How do I add an expense?":"मैं खर्च कैसे जोड़ूं?","How do I add income?":"मैं आय कैसे जोड़ूं?",
+  "Share your experience, report a problem or suggest a feature":"अपना अनुभव साझा करें, समस्या बताएं या फीचर सुझाएं","Learn every feature":"हर फीचर के बारे में जानें","Personalize the app":"ऐप को अपनी पसंद के अनुसार बनाएं","Add your own income & expense categories":"अपनी आय और खर्च की कैटेगरी जोड़ें","View all income, expense & ledger records":"सभी आय, खर्च और लेजर रिकॉर्ड देखें","Monthly spending limits":"मासिक खर्च की सीमाएं","Jobs & salary history":"नौकरी और सैलरी इतिहास","Add Loan":"लोन जोड़ें","Principal, interest & tenure":"मूलधन, ब्याज और अवधि","Add EMI":"EMI जोड़ें","Record repayment":"भुगतान दर्ज करें","Loan Schedule":"लोन शेड्यूल","Principal & interest timeline":"मूलधन और ब्याज की समयरेखा","Name, phone & balances":"नाम, फोन और बैलेंस","Lena / Dena — receive & pay":"लेना / देना — प्राप्त और भुगतान","Ask ABS AI anything about your finances...":"अपने फाइनेंस के बारे में ABS AI से कुछ भी पूछें...","Personal Finance Copilot":"पर्सनल फाइनेंस कोपायलट","SUGGESTED NEXT":"अगला सुझाव","NEW TOPIC":"नया विषय","More Services":"और सेवाएं","this month":"इस महीने","Please type a question.":"कृपया कोई सवाल लिखें।","How much have I spent?":"मैंने कितना खर्च किया है?","How much income do I have?":"मेरी आय कितनी है?","What are my total savings?":"मेरी कुल बचत कितनी है?","How much EMI have I paid?":"मैंने कितनी EMI चुकाई है?","How much do I need to receive?":"मुझे कितना पैसा मिलना है?","How much do I need to pay?":"मुझे कितना पैसा देना है?","How do I download my statement?":"मैं अपना स्टेटमेंट कैसे डाउनलोड करूं?","How do I add an expense?":"मैं खर्च कैसे जोड़ूं?","How do I add income?":"मैं आय कैसे जोड़ूं?",
   "Smart Fresh":"स्मार्ट फ्रेश","Enter your account password":"अपना अकाउंट पासवर्ड दर्ज करें","RESET":"रीसेट","Account not found":"अकाउंट नहीं मिला","Profile Picture":"प्रोफ़ाइल फोटो","Update your profile photo":"अपनी प्रोफ़ाइल फोटो अपडेट करें","Upload a photo or choose an avatar below.":"फोटो अपलोड करें या नीचे अवतार चुनें।","Upload Photo":"फोटो अपलोड करें","Choose an avatar":"अवतार चुनें","Profile photo updated":"प्रोफ़ाइल फोटो अपडेट हो गई","Avatar updated":"अवतार अपडेट हो गया","Please choose an image":"कृपया एक इमेज चुनें","Enter your name":"अपना नाम दर्ज करें","Profile updated successfully":"प्रोफ़ाइल सफलतापूर्वक अपडेट हो गई","Current password is incorrect":"वर्तमान पासवर्ड गलत है","Password changed successfully":"पासवर्ड सफलतापूर्वक बदल गया","RELOAD PROFILE":"प्रोफ़ाइल फिर से लोड करें","Personal finance, made simple.":"पर्सनल फाइनेंस, आसान तरीके से।","Personal details":"व्यक्तिगत जानकारी","Back":"वापस","SAVE CHANGES":"बदलाव सेव करें","Refresh data":"डेटा रिफ्रेश करें","Toggle theme":"थीम बदलें","Dashboard refreshed":"डैशबोर्ड रिफ्रेश हो गया","PDF engine is loading — try again":"PDF इंजन लोड हो रहा है — फिर से प्रयास करें"
 });
