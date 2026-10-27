@@ -2,7 +2,7 @@ const API_BASE = 'https://abs-dashboard-t7up.onrender.com/api';
 
 const $ = id => document.getElementById(id);
 let adminToken = sessionStorage.getItem('abs_admin_token') || '';
-let state = { users: [], feedback: [], ads: [], notifications: [], summary: {} };
+let state = { users: [], feedback: [], ads: [], notifications: [], supportRequests: [], summary: {} };
 let refreshInProgress = false;
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({
@@ -97,7 +97,7 @@ async function refreshAdmin(){
   );
   const previousLabels = refreshButtons.map(btn => btn.textContent);
   refreshButtons.forEach(btn => { btn.disabled = true; if(/refresh/i.test(btn.textContent||'')) btn.textContent = '↻ Refreshing…'; });
-  setAdminRefreshStatus('Refreshing users, banners and feedback…');
+  setAdminRefreshStatus('Refreshing users, ads, feedback and support requests…');
 
   try{
     if(!adminToken){
@@ -109,10 +109,11 @@ async function refreshAdmin(){
     state.users = Array.isArray(usersResponse.items) ? usersResponse.items : [];
 
     const warnings = [];
-    const [adsResult, feedbackResult, notificationsResult] = await Promise.allSettled([
+    const [adsResult, feedbackResult, notificationsResult, supportResult] = await Promise.allSettled([
       api('/admin/ads'),
       api('/admin/feedback'),
-      api('/admin/notifications')
+      api('/admin/notifications'),
+      api('/admin/support-requests')
     ]);
     if(adsResult.status === 'fulfilled') state.ads = Array.isArray(adsResult.value.items) ? adsResult.value.items : [];
     else { state.ads = []; warnings.push(`banners: ${adsResult.reason?.message || 'failed'}`); }
@@ -120,23 +121,27 @@ async function refreshAdmin(){
     else { state.feedback = []; warnings.push(`feedback: ${feedbackResult.reason?.message || 'failed'}`); }
     if(notificationsResult.status === 'fulfilled') state.notifications = Array.isArray(notificationsResult.value.items) ? notificationsResult.value.items : [];
     else { state.notifications = []; warnings.push(`notifications: ${notificationsResult.reason?.message || 'failed'}`); }
+    if(supportResult.status === 'fulfilled') state.supportRequests = Array.isArray(supportResult.value.items) ? supportResult.value.items : [];
+    else { state.supportRequests = []; warnings.push(`support requests: ${supportResult.reason?.message || 'failed'}`); }
 
     state.summary = {
       users: state.users.length,
       verified: state.users.filter(u => u.verified === true).length,
       premium: state.users.filter(u => u.verified === true).length,
       feedback: state.feedback.length,
-      ads: state.ads.filter(a => a.active === true || a.active === 1).length
+      ads: state.ads.filter(a => a.active === true || a.active === 1).length,
+      supportRequests: state.supportRequests.length
     };
 
     renderStats();
     renderUsers();
     renderAds();
     renderFeedback();
+    renderSupportRequests();
     renderAdminNotifications();
     setAdminRefreshStatus(warnings.length
       ? `Users refreshed; some data could not load (${warnings.join('; ')}).`
-      : `Updated just now · ${state.users.length} users · ${state.ads.length} banners · ${state.feedback.length} feedback items.`, warnings.length > 0);
+      : `Updated just now · ${state.users.length} users · ${state.ads.length} banners · ${state.feedback.length} feedback items · ${state.supportRequests.length} support requests.`, warnings.length > 0);
 
   }catch(e){
     console.error('ABS Admin refresh failed:', e);
@@ -541,6 +546,26 @@ function renderFeedback(){
     : '<div class="empty">No feedback yet.</div>';
 }
 
+function renderSupportRequests(){
+  const host=$('supportRequests');if(!host)return;
+  const count=$('supportCountMini');if(count)count.textContent=`${state.supportRequests.length} request${state.supportRequests.length===1?'':'s'}`;
+  host.innerHTML=state.supportRequests.length?state.supportRequests.map(r=>{
+    const status=String(r.status||'open');
+    const statusLabel=status==='resolved'?'RESOLVED':status==='in-progress'?'IN PROGRESS':'NEW';
+    const statusClass=status==='resolved'?'secondary':status==='in-progress'?'blue':'danger';
+    return `<div class="support-request-admin-card">
+      <div class="support-request-admin-top"><div><div class="adtitle">#${Number(r.id)} · ${esc(r.issue||'Support request')}</div><div class="sub">${esc(r.name||'ABS User')} · ABS ID: ${esc(r.abs_id||'—')}</div></div><span class="badge ${statusClass}">${statusLabel}</span></div>
+      <div class="support-request-admin-meta"><a href="tel:${escAttr(r.mobile||'')}">${esc(r.mobile||'No number')}</a><span>${esc(formatDate(r.created_at))}</span></div>
+      <p>${esc(r.description||'No additional description provided.').replace(/\n/g,'<br>')}</p>
+      <div class="ad-actions">${status!=='in-progress'&&status!=='resolved'?`<button class="btn" onclick="updateSupportStatus(${Number(r.id)},'in-progress')">MARK IN PROGRESS</button>`:''}${status!=='resolved'?`<button class="btn blue" onclick="updateSupportStatus(${Number(r.id)},'resolved')">MARK RESOLVED</button>`:`<button class="btn secondary" onclick="updateSupportStatus(${Number(r.id)},'open')">REOPEN</button>`}</div>
+    </div>`;
+  }).join(''):'<div class="empty">No customer support requests yet.</div>';
+}
+async function updateSupportStatus(id,status){
+  try{await api('/admin/support-requests/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({status})});await refreshAdmin();setAdminRefreshStatus('Support request status updated.')}
+  catch(e){alert(e.message||'Unable to update support request status.')}
+}
+
 function toLocalDateTime(v){ if(!v) return ''; const d=new Date(v); if(isNaN(d)) return ''; const pad=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 
 function formatDate(v){
@@ -614,6 +639,7 @@ window.openAdModal = openAdModal;
 window.openNotificationModal = openNotificationModal;
 window.saveNotification = saveNotification;
 window.deleteNotification = deleteNotification;
+window.updateSupportStatus = updateSupportStatus;
 window.saveAd = saveAd;
 window.toggleAd = toggleAd;
 window.deleteAd = deleteAd;
