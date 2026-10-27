@@ -674,7 +674,47 @@ async function copyABSShareText(text){try{if(navigator.clipboard&&window.isSecur
 function showABSShareFallback(payload){const body=absShareBody(payload);const encoded=encodeURIComponent(body);const wa='https://wa.me/?text='+encoded;openModal('Share ABS',`<div class="workspace-hero"><div class="workspace-icon">↗</div><div><div class="eyebrow">SHARE WITH FRIENDS</div><h3>${esc(payload.title||'ABS DASHBOARD')}</h3><p>Choose WhatsApp, Instagram, or copy the message.</p></div></div><a class="primary full abs-share-choice" href="${escAttr(wa)}" target="_blank" rel="noopener">Share to WhatsApp</a><a class="secondary full abs-share-choice" href="https://www.instagram.com/direct/inbox/" target="_blank" rel="noopener" id="absShareInstagram">Open Instagram messages</a><button type="button" class="secondary full abs-share-choice" id="absShareCopy">Copy message</button>`);document.getElementById('absShareInstagram')?.addEventListener('click',async()=>{await copyABSShareText(body);toast('Message copied. Paste it into Instagram chat.');});document.getElementById('absShareCopy')?.addEventListener('click',async()=>{const ok=await copyABSShareText(body);toast(ok?'Share message copied':'Could not copy message');});}
 async function shareABSContent(payload){const title=String(payload.title||'ABS DASHBOARD'),text=String(payload.text||''),url=String(payload.url||'');try{if(window.AbsShare&&typeof window.AbsShare.share==='function'){const result=window.AbsShare.share(title,text,url);if(result&&typeof result.then==='function')await result;return}if(typeof navigator.share==='function'){await navigator.share({title,text,url:url||undefined});return}showABSShareFallback({title,text,url})}catch(e){if(e?.name==='AbortError')return;console.error('ABS share failed',e);showABSShareFallback({title,text,url})}}
 async function shareABSApp(){await shareABSContent({title:'ABS DASHBOARD',text:'Download ABS DASHBOARD — personal finance, income, expenses, loans and EMI in one app.',url:ABS_APP_DOWNLOAD_URL})}
-function openProfileChat(){state.profileChatReturnTab='profile';state.tab='ai';renderAI();renderFooter()}
+function openCustomerSupport(){
+  if(!state.user)return toast('Please login to request support.');
+  const savedMobile=String(state.user.mobile||'').replace(/\D/g,'').slice(-10);
+  const issues=[
+    'Password Change / Login Issue',
+    'Income / Expense / Data Problem',
+    'Statement / PDF Download Problem',
+    'App Crash / Error',
+    'Profile / Photo Problem',
+    'Premium / Verification Request',
+    'Notifications / Update Problem',
+    'Request a Call',
+    'Feature Request / Suggestion',
+    'Other'
+  ];
+  openModal('Customer Support',`<div class="feedback-hero support-request-hero"><div class="feedback-icon">?</div><div><div class="eyebrow">ABS CUSTOMER SUPPORT</div><h3>How can we help you?</h3><p>Choose the issue and enter the best number to contact you. Description is optional.</p></div></div><form id="customerSupportForm" class="professional-form" novalidate><div class="form-fields"><label class="field"><span>Mobile Number *</span><div class="field-control"><input id="supportMobile" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="14" value="${escAttr(savedMobile)}" placeholder="10-digit mobile number" required></div></label><label class="field"><span>Choose Issue *</span><div class="field-control"><select id="supportIssue" required>${issues.map(x=>`<option value="${escAttr(x)}">${esc(x)}</option>`).join('')}</select></div></label><label class="field full-field"><span>Description (Optional)</span><div class="field-control"><textarea id="supportDescription" rows="4" maxlength="1200" placeholder="Describe the issue, steps tried, or a suitable time to call..."></textarea></div><small id="supportDescriptionCount">0 / 1200</small></label></div><div id="supportFormMsg" class="support-form-message" role="alert"></div><button type="submit" id="supportSubmitButton" class="primary full support-submit-button">SUBMIT SUPPORT REQUEST</button><p class="support-request-note">Your request will be sent securely to the ABS support team.</p></form>`);
+  const form=document.getElementById('customerSupportForm');
+  const desc=document.getElementById('supportDescription');
+  desc?.addEventListener('input',()=>{const count=document.getElementById('supportDescriptionCount');if(count)count.textContent=`${desc.value.length} / 1200`});
+  form?.addEventListener('submit',async event=>{
+    event.preventDefault();
+    const msg=document.getElementById('supportFormMsg'),btn=document.getElementById('supportSubmitButton');
+    let mobile=String(document.getElementById('supportMobile')?.value||'').trim().replace(/\D/g,'');
+    if(mobile.length===12&&mobile.startsWith('91'))mobile=mobile.slice(2);
+    const issue=String(document.getElementById('supportIssue')?.value||'').trim();
+    const description=String(document.getElementById('supportDescription')?.value||'').trim();
+    if(!/^[6-9]\d{9}$/.test(mobile)){if(msg)msg.textContent='Enter a valid 10-digit Indian mobile number.';return}
+    if(!issue){if(msg)msg.textContent='Please choose an issue.';return}
+    if(description.length>1200){if(msg)msg.textContent='Description must be 1,200 characters or less.';return}
+    if(btn){btn.disabled=true;btn.textContent='SENDING REQUEST…'}
+    if(msg)msg.textContent='';
+    try{
+      const token=await absFirebaseToken();
+      const response=await fetch(ABS_PUBLIC_API_BASE+'/support-requests',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({mobile,issue,description}),cache:'no-store'});
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data.error||'Support request could not be sent. Please try again.');
+      const ref=Number(data.id||0);
+      openModal('Request Submitted',`<div class="support-success"><div class="support-success-icon">✓</div><h3>Your request has been sent</h3><p>The ABS support team can review the issue details and contact number you provided.</p>${ref?`<div class="support-ticket-ref">Reference: <b>ABS-SUP-${ref}</b></div>`:''}<button type="button" class="primary full" onclick="closeModal()">DONE</button></div>`);
+    }catch(error){console.error('ABS customer support submission failed:',error);const currentMsg=document.getElementById('supportFormMsg');if(currentMsg)currentMsg.textContent=error.message||'Unable to send the request. Please try again.';if(btn){btn.disabled=false;btn.textContent='SUBMIT SUPPORT REQUEST'}}
+  });
+}
 function updateABSApp(){openModal('Update ABS DASHBOARD',`<div class="workspace-hero"><div class="workspace-icon">⇩</div><div><div class="eyebrow">LATEST ANDROID VERSION</div><h3>Download current ABS app</h3><p>The latest public APK release will open. After download, tap the APK file and confirm Install. Android may ask you to allow installs from your browser.</p></div></div><a class="primary full" style="display:block;text-align:center;text-decoration:none;padding:14px;border-radius:12px" href="${ABS_APP_DOWNLOAD_URL}" target="_blank" rel="noopener">DOWNLOAD LATEST APK</a>`)}
 function renderProfile(){
   const screenEl=document.getElementById("screen");
@@ -689,7 +729,7 @@ function renderProfile(){
     screenEl.innerHTML=`<div class="page-title">Profile</div><p class="page-sub">Account, security and preferences.</p>
       <section class="profile-premium profile-identity-row"><div class="profile-avatar">${avatar?`<img src="${esc(avatar)}" alt="Profile">`:esc(emoji)}</div><div class="profile-identity"><div class="profile-name">${esc(state.user.name)} ${verified?'<span class="verified-badge" aria-label="Verified"><svg viewBox="0 0 24 24"><path d="M7 12.5l3.1 3.1L17.5 8.5"/></svg></span>':''}</div><div class="profile-mobile">${esc(currentUserRecord()?.absId||state.user.absId||"")}</div></div><button type="button" class="profile-edit-inline" id="profileEditBtn" onclick="openProfileEdit(); return false;">Edit Profile <span>›</span></button></section>
       ${premiumCard}
-      <div class="profile-social-actions"><button type="button" class="primary" onclick="openProfileChat()">▤ Chat</button><button type="button" class="secondary" onclick="shareABSApp()">↗ Share App</button><button type="button" class="secondary" onclick="updateABSApp()">⇩ Update</button></div>
+      <div class="profile-social-actions"><button type="button" class="profile-action-button" onclick="openCustomerSupport()"><span class="profile-action-icon">☏</span><span>Customer Support</span><span class="profile-action-arrow">›</span></button><button type="button" class="profile-action-button" onclick="shareABSApp()"><span class="profile-action-icon">↗</span><span>Share App</span><span class="profile-action-arrow">›</span></button><button type="button" class="profile-action-button" onclick="updateABSApp()"><span class="profile-action-icon">⇩</span><span>Update App</span><span class="profile-action-arrow">›</span></button></div>
       <div class="menu">
         <button type="button" onclick="openPassword()"><span>🔒 Change Password</span><span>›</span></button>
         <button type="button" data-profile-action="theme"><span>◐ Theme</span><span>${esc(state.theme)}</span></button>
@@ -931,7 +971,7 @@ async function logout(){
 }
 function openModal(title,body){$("#modalRoot").innerHTML=`<div class="modal-backdrop" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-head"><h2>${esc(title)}</h2><button class="close" onclick="closeModal()">×</button></div>${body}</div></div>`}
 function closeModal(){$("#modalRoot").innerHTML=""}
-window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=openHistory;window.addCategory=addCategory;window.removeCategory=removeCategory;window.editHistoryEntry=editHistoryEntry;window.exportPDF=exportPDF;window.openFeature=openFeature;window.openEditRecords=openEditRecords;window.closeModal=closeModal;window.renderDashboard=renderDashboard;window.setChartRange=setChartRange;window.openProfileEdit=openProfileEdit;window.openPassword=openPassword;window.toggleTheme=toggleTheme;window.exportData=exportData;window.openAvatarPicker=openAvatarPicker;window.setAvatar=setAvatar;window.logout=logout;window.openPeople=openPeople;window.openPersonForm=openPersonForm;window.openLedger=openLedger;window.openLedgerForm=openLedgerForm;window.processBulkImport=processBulkImport;window.downloadBulkTemplate=downloadBulkTemplate;window.resetFinancialData=resetFinancialData;window.openStatement=openStatement;window.exportStatementPDF=exportStatementPDF;window.requestPremium=requestPremium;window.refreshAppData=refreshAppData;window.goTab=goTab;window.openProfileChat=openProfileChat;window.shareABSApp=shareABSApp;window.updateABSApp=updateABSApp;window.renderNotifications=renderNotifications;
+window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=openHistory;window.addCategory=addCategory;window.removeCategory=removeCategory;window.editHistoryEntry=editHistoryEntry;window.exportPDF=exportPDF;window.openFeature=openFeature;window.openEditRecords=openEditRecords;window.closeModal=closeModal;window.renderDashboard=renderDashboard;window.setChartRange=setChartRange;window.openProfileEdit=openProfileEdit;window.openPassword=openPassword;window.toggleTheme=toggleTheme;window.exportData=exportData;window.openAvatarPicker=openAvatarPicker;window.setAvatar=setAvatar;window.logout=logout;window.openPeople=openPeople;window.openPersonForm=openPersonForm;window.openLedger=openLedger;window.openLedgerForm=openLedgerForm;window.processBulkImport=processBulkImport;window.downloadBulkTemplate=downloadBulkTemplate;window.resetFinancialData=resetFinancialData;window.openStatement=openStatement;window.exportStatementPDF=exportStatementPDF;window.requestPremium=requestPremium;window.refreshAppData=refreshAppData;window.goTab=goTab;window.openCustomerSupport=openCustomerSupport;window.shareABSApp=shareABSApp;window.updateABSApp=updateABSApp;window.renderNotifications=renderNotifications;
 setup();
 if(firebaseAdminReady()){
   firebase.auth().onAuthStateChanged(async user=>{
