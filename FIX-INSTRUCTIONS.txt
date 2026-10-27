@@ -4,7 +4,7 @@ Copy the contents of this ZIP into the ROOT of your ztrends/ABS-DASHBOARD reposi
 
 This patch includes:
 - Native APK opens Login directly when signed out, instead of showing the website landing page first.
-- Android system share chooser for Share App and ABS Tweet; browser fallback offers WhatsApp and Instagram.
+- Android system share chooser for Share App and Notifications; browser fallback offers WhatsApp and Instagram.
 - Profile Chat button restored (not added to bottom navigation).
 - GitHub Pages deployment validation and root-branch redirect fallback for the website 404.
 - APK workflow injects the native share bridge during the Android build.
