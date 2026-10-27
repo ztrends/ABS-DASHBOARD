@@ -24,12 +24,14 @@ jobs:
           java-version: '21'
 
       - name: Install Capacitor
-        run: cd frontend && npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/assets
+        run: cd frontend && npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/assets jspdf@2.5.1
 
       - name: Prepare web files
         run: |
           cd frontend
           rm -rf www && mkdir -p www
+          mkdir -p js/vendor
+          cp node_modules/jspdf/dist/jspdf.umd.min.js js/vendor/jspdf.umd.min.js
           cp index.html www/index.html
           for d in assets css js admin; do
             if [ -d "$d" ]; then cp -R "$d" www/; fi
@@ -126,6 +128,71 @@ jobs:
               s = s[:i] + block + '\n' + s[i:]
           p.write_text(s)
           PYSHARE
+
+      - name: Add native PDF save bridge for Android Downloads
+        run: |
+          cd frontend/android
+          python3 - <<'PYPDF'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/absdashboard/app/MainActivity.java')
+          s = p.read_text()
+          imports = [
+              'import android.content.ContentValues;',
+              'import android.net.Uri;',
+              'import android.os.Build;',
+              'import android.os.Environment;',
+              'import android.provider.MediaStore;',
+              'import android.util.Base64;',
+              'import java.io.OutputStream;'
+          ]
+          first_line_end = s.find('\n')
+          if first_line_end < 0:
+              raise SystemExit('MainActivity package declaration missing')
+          existing = s
+          additions = ''.join('\n' + item for item in imports if item not in existing)
+          if additions:
+              s = s[:first_line_end] + additions + s[first_line_end:]
+          if 'addJavascriptInterface(new AbsFileBridge(), "AbsFile")' not in s:
+              marker = 'getBridge().getWebView().addJavascriptInterface(new AbsShareBridge(), "AbsShare");'
+              if marker not in s:
+                  raise SystemExit('AbsShare bridge hook not found in MainActivity')
+              s = s.replace(marker, marker + '\n                      getBridge().getWebView().addJavascriptInterface(new AbsFileBridge(), "AbsFile");', 1)
+          if 'class AbsFileBridge' not in s:
+              i = s.rfind('}')
+              block = '''
+
+              private class AbsFileBridge {
+                  @JavascriptInterface
+                  public String savePdfBase64(String encoded, String filename) {
+                      try {
+                          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                              return "ERROR:Android 10 or newer is required for direct Downloads saving.";
+                          }
+                          byte[] bytes = Base64.decode(encoded, Base64.DEFAULT);
+                          if (bytes == null || bytes.length == 0) return "ERROR:PDF data is empty.";
+                          String safeName = (filename == null ? "ABS-Statement.pdf" : filename).replaceAll("[^A-Za-z0-9._-]", "_");
+                          if (!safeName.toLowerCase().endsWith(".pdf")) safeName += ".pdf";
+                          ContentValues values = new ContentValues();
+                          values.put(MediaStore.Downloads.DISPLAY_NAME, safeName);
+                          values.put(MediaStore.Downloads.MIME_TYPE, "application/pdf");
+                          values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                          Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                          if (uri == null) return "ERROR:Could not create a Downloads file.";
+                          try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                              if (out == null) return "ERROR:Could not write the PDF file.";
+                              out.write(bytes);
+                              out.flush();
+                          }
+                          return "OK";
+                      } catch (Exception e) {
+                          return "ERROR:" + (e.getMessage() == null ? "PDF could not be saved." : e.getMessage());
+                      }
+                  }
+              }
+              '''
+              s = s[:i] + block + '\n' + s[i:]
+          p.write_text(s)
+          PYPDF
 
       - name: Ensure Android and Maven Central repositories
         run: |
