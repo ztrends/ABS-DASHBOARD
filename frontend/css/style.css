@@ -358,3 +358,42 @@ body.ai-open .ai-chat-composer{bottom:82px}
 
 /* ABS social share fallback */
 .abs-share-choice{display:block;width:100%;text-align:center;text-decoration:none;padding:13px 14px;border-radius:12px;margin-top:9px;font-weight:800}
+
+
+/* Profile: clean left-aligned list. All actions share one layout; no individual cards/borders. */
+#screen .profile-social-actions.profile-list-group,
+#screen .menu.profile-menu-list.profile-list-group{
+  display:flex;flex-direction:column;gap:0;width:100%;margin:12px 0 0;padding:0;
+  border:0;border-radius:0;background:transparent;box-shadow:none;
+}
+#screen .profile-social-actions .profile-action-button,
+#screen .menu.profile-menu-list>button{
+  display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;justify-content:initial;
+  gap:10px;width:100%;min-width:0;min-height:54px;height:54px;margin:0;padding:0 8px;
+  border:0;border-radius:0;background:transparent;color:var(--text);box-shadow:none;
+  font:750 12px/1.35 Inter,system-ui,sans-serif;text-align:left;text-decoration:none;
+}
+#screen .profile-social-actions .profile-action-button:active,
+#screen .menu.profile-menu-list>button:active{transform:none;background:rgba(124,108,255,.07)}
+#screen .profile-social-actions .profile-action-button:hover,
+#screen .menu.profile-menu-list>button:hover{border:0;background:rgba(124,108,255,.045);box-shadow:none}
+#screen .profile-social-actions .profile-action-icon,
+#screen .menu.profile-menu-list .profile-menu-icon{
+  position:static;left:auto;right:auto;width:24px;height:24px;display:grid;place-items:center;
+  border:0;border-radius:0;background:transparent;color:var(--accent);font-size:17px;font-weight:800;
+  box-shadow:none;flex:none;
+}
+#screen .profile-social-actions .profile-action-label,
+#screen .menu.profile-menu-list .profile-menu-label,
+#screen .menu.profile-menu-list .profile-menu-copy{display:block;min-width:0;text-align:left;justify-self:stretch}
+#screen .profile-social-actions .profile-action-arrow,
+#screen .menu.profile-menu-list .profile-menu-arrow{position:static;right:auto;color:var(--muted);font-size:21px;font-weight:400;justify-self:end}
+#screen .menu.profile-menu-list .profile-menu-value{color:var(--muted);font-size:12px;font-weight:500;justify-self:end}
+#screen .menu.profile-menu-list .profile-menu-copy b{display:block;font-size:12px;font-weight:750;line-height:1.35}
+#screen .menu.profile-menu-list .profile-menu-copy small{display:block;margin-top:3px;color:var(--muted);font-size:9px;font-weight:500;line-height:1.35}
+#screen .menu.profile-menu-list .danger{color:#f06f85;background:transparent}
+#screen .menu.profile-menu-list .danger .profile-menu-icon{color:#f06f85}
+.light #screen .profile-social-actions .profile-action-button,
+.light #screen .menu.profile-menu-list>button{background:transparent;color:#182230;border:0;box-shadow:none}
+.light #screen .profile-social-actions .profile-action-button:hover,
+.light #screen .menu.profile-menu-list>button:hover{background:rgba(99,91,219,.045);border:0;box-shadow:none}
