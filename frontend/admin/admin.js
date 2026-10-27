@@ -2,7 +2,7 @@ const API_BASE = 'https://abs-dashboard-t7up.onrender.com/api';
 
 const $ = id => document.getElementById(id);
 let adminToken = sessionStorage.getItem('abs_admin_token') || '';
-let state = { users: [], feedback: [], ads: [], tweets: [], summary: {} };
+let state = { users: [], feedback: [], ads: [], notifications: [], summary: {} };
 let refreshInProgress = false;
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({
@@ -109,17 +109,17 @@ async function refreshAdmin(){
     state.users = Array.isArray(usersResponse.items) ? usersResponse.items : [];
 
     const warnings = [];
-    const [adsResult, feedbackResult, tweetsResult] = await Promise.allSettled([
+    const [adsResult, feedbackResult, notificationsResult] = await Promise.allSettled([
       api('/admin/ads'),
       api('/admin/feedback'),
-      api('/admin/tweets')
+      api('/admin/notifications')
     ]);
     if(adsResult.status === 'fulfilled') state.ads = Array.isArray(adsResult.value.items) ? adsResult.value.items : [];
     else { state.ads = []; warnings.push(`banners: ${adsResult.reason?.message || 'failed'}`); }
     if(feedbackResult.status === 'fulfilled') state.feedback = Array.isArray(feedbackResult.value.items) ? feedbackResult.value.items : [];
     else { state.feedback = []; warnings.push(`feedback: ${feedbackResult.reason?.message || 'failed'}`); }
-    if(tweetsResult.status === 'fulfilled') state.tweets = Array.isArray(tweetsResult.value.items) ? tweetsResult.value.items : [];
-    else { state.tweets = []; warnings.push(`tweets: ${tweetsResult.reason?.message || 'failed'}`); }
+    if(notificationsResult.status === 'fulfilled') state.notifications = Array.isArray(notificationsResult.value.items) ? notificationsResult.value.items : [];
+    else { state.notifications = []; warnings.push(`notifications: ${notificationsResult.reason?.message || 'failed'}`); }
 
     state.summary = {
       users: state.users.length,
@@ -133,7 +133,7 @@ async function refreshAdmin(){
     renderUsers();
     renderAds();
     renderFeedback();
-    renderAdminTweets();
+    renderAdminNotifications();
     setAdminRefreshStatus(warnings.length
       ? `Users refreshed; some data could not load (${warnings.join('; ')}).`
       : `Updated just now · ${state.users.length} users · ${state.ads.length} banners · ${state.feedback.length} feedback items.`, warnings.length > 0);
@@ -561,10 +561,22 @@ function closeModal(){
 
 // Bind the login form explicitly. Without this handler, the browser submits
 // the HTML form and reloads the page instead of calling the Render login API.
-function renderAdminTweets(){const host=$('tweets');if(!host)return;host.innerHTML=state.tweets.length?state.tweets.map(t=>`<div class="ad"><div class="adtitle">${esc(t.abs_id||'ABS OFFICIAL')} ${t.verified?'<span class="verify">✓</span>':''}</div><div class="sub">${esc(t.created_at||'')}</div><p>${esc(t.text||'')}</p>${t.image_url?`<img src="${esc(t.image_url)}" alt="Product image">`:''}${t.link_url?`<p><a href="${esc(t.link_url)}" target="_blank" rel="noopener">${esc(t.link_url)}</a></p>`:''}<div class="ad-actions"><button class="btn danger" onclick="deleteAdminTweet(${Number(t.id)})">DELETE POST</button></div></div>`).join(''):'<div class="empty">No ABS Tweets posted yet.</div>'}
-function openAdminTweetModal(){ $('modalTitle').textContent='Post to ABS Tweet'; $('modalBody').innerHTML=`<label>Post text / product description</label><textarea id="adminTweetText" maxlength="500" placeholder="Write an ABS update or product description"></textarea><label>Upload product image (max 1.5 MB)</label><input id="adminTweetFile" type="file" accept="image/*"><label>Or product image URL (HTTPS)</label><input id="adminTweetImage" type="url" placeholder="https://example.com/product.jpg"><div id="adminTweetPreview" class="preview"></div><label>Product / destination link (HTTPS)</label><input id="adminTweetLink" type="url" placeholder="https://example.com/product"><button class="btn full" style="margin-top:16px" onclick="saveAdminTweet()">POST TO ABS TWEET</button><div id="adminTweetMsg" class="msg"></div>`;window._adminTweetImage='';$('adminTweetFile').onchange=()=>{const f=$('adminTweetFile').files?.[0];if(!f)return;if(f.size>1.5*1024*1024){$('adminTweetMsg').textContent='Choose an image under 1.5 MB.';return}const r=new FileReader();r.onload=ev=>{window._adminTweetImage=ev.target.result;$('adminTweetPreview').style.display='block';$('adminTweetPreview').innerHTML=`<img src="${ev.target.result}" alt="Preview">`};r.readAsDataURL(f)};$('modal').classList.remove('hidden')}
-async function saveAdminTweet(){const msg=$('adminTweetMsg'),text=$('adminTweetText').value.trim(),image_url=window._adminTweetImage||$('adminTweetImage').value.trim(),link_url=$('adminTweetLink').value.trim();try{const d=await api('/admin/tweets',{method:'POST',body:JSON.stringify({text,image_url,link_url})});closeModal();await refreshAdmin();setAdminRefreshStatus('ABS Tweet posted successfully.')}catch(e){msg.textContent=e.message||'Post failed.'}}
-async function deleteAdminTweet(id){if(!confirm('Delete this ABS Tweet permanently?'))return;try{await api('/admin/tweets/'+encodeURIComponent(id),{method:'DELETE'});await refreshAdmin()}catch(e){alert(e.message||'Delete failed')}}
+function renderAdminNotifications(){
+  const host=$('notifications');if(!host)return;
+  host.innerHTML=state.notifications.length?state.notifications.map(n=>`<div class="ad"><div class="adtitle">${esc(n.title||'ABS Update')}</div><div class="sub">${esc(formatDate(n.created_at))} · ${esc(n.type||'announcement')}</div><p>${esc(n.message||'')}</p>${n.link?`<p><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.link)}</a></p>`:''}<div class="ad-actions"><button class="btn danger" onclick="deleteNotification(${Number(n.id)})">DELETE NOTICE</button></div></div>`).join(''):'<div class="empty">No broadcast notifications yet.</div>';
+}
+function openNotificationModal(){
+  $('modalTitle').textContent='Message All ABS Users';
+  $('modalBody').innerHTML=`<p class="muted">This message will appear in the Notifications section for all signed-in users.</p><label>Title</label><input id="notificationTitle" maxlength="120" placeholder="e.g. Scheduled maintenance"><label>Message</label><textarea id="notificationMessage" maxlength="2000" placeholder="Write the announcement for all ABS users"></textarea><label>Type</label><select id="notificationType"><option value="announcement">Announcement</option><option value="update">App Update</option><option value="important">Important</option></select><label>Link (optional, HTTPS)</label><input id="notificationLink" type="url" placeholder="https://example.com"><div id="notificationMsg" class="msg"></div><button class="btn full" style="margin-top:16px" onclick="saveNotification()">SEND TO ALL USERS</button>`;
+  $('modal').classList.remove('hidden');
+}
+async function saveNotification(){
+  const msg=$('notificationMsg'),title=$('notificationTitle').value.trim(),message=$('notificationMessage').value.trim(),type=$('notificationType').value,link=$('notificationLink').value.trim();
+  if(!title||!message){msg.textContent='Title and message are required.';return}
+  try{await api('/admin/notifications',{method:'POST',body:JSON.stringify({title,message,type,link})});closeModal();await refreshAdmin();setAdminRefreshStatus('Notification sent to all users.')}catch(e){msg.textContent=e.message||'Notification could not be sent.'}
+}
+async function deleteNotification(id){if(!confirm('Delete this notification? It will disappear from all users’ Notifications section.'))return;try{await api('/admin/notifications/'+encodeURIComponent(id),{method:'DELETE'});await refreshAdmin()}catch(e){alert(e.message||'Delete failed')}}
+
 const loginForm = $('loginForm');
 if (loginForm && loginForm.dataset.absLoginBound !== '1') {
   loginForm.dataset.absLoginBound = '1';
@@ -599,9 +611,9 @@ window.deleteUser = deleteUser;
 window.saveUser = saveUser;
 window.createUser = createUser;
 window.openAdModal = openAdModal;
-window.openAdminTweetModal = openAdminTweetModal;
-window.saveAdminTweet = saveAdminTweet;
-window.deleteAdminTweet = deleteAdminTweet;
+window.openNotificationModal = openNotificationModal;
+window.saveNotification = saveNotification;
+window.deleteNotification = deleteNotification;
 window.saveAd = saveAd;
 window.toggleAd = toggleAd;
 window.deleteAd = deleteAd;
