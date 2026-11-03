@@ -123,6 +123,9 @@
   };
 
   document.addEventListener('DOMContentLoaded',()=>{
+    const style = document.createElement('style');
+    style.textContent = '.userdata-table{width:100%;border-collapse:collapse;font-size:10px}.userdata-table th,.userdata-table td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left}.userdata-table th{position:sticky;top:0;background:#1b1e24;color:#aeb4bf;font-size:9px;text-transform:uppercase}.userdata-table td{color:#d4d7dd}.userdata-table td.num{text-align:right;white-space:nowrap;font-weight:700}.userdata-table-wrap{max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:10px}.userdata-records{margin:14px 0}.userdata-records h3{font:800 11px Manrope,sans-serif;color:#e4a16d;margin:0 0 8px}.userdata-kpis .panel{background:#171a20;border:1px solid var(--line);border-radius:10px}';
+    document.head.appendChild(style);
     const host = byId('userDataDirectory');
     if(host){
       host.addEventListener('click',event=>{
