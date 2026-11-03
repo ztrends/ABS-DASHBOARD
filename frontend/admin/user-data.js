@@ -77,6 +77,7 @@
     const user = (state.users || []).find(item => item.uid === uid);
     if(!user) return;
     selectedUser = uid;
+    selectedDetails = null;
     renderDirectory();
     const title = byId('userDataDetailTitle');
     const subtitle = byId('userDataDetailSubtitle');
@@ -91,6 +92,7 @@
     host.innerHTML = '<div class="empty">Loading saved financial records…</div>';
     try{
       const result = await api('/admin/firebase-users/' + encodeURIComponent(uid) + '/details');
+      if(selectedUser !== uid) return;
       cache.set(uid,result);
       selectedDetails = result;
       renderDetails(result,user);
@@ -147,4 +149,13 @@
     window.scrollTo({top:0,behavior:'smooth'});
     renderDirectory();
   };
+
+  const baseRefresh = window.refreshAdmin;
+  if(typeof baseRefresh === 'function'){
+    window.refreshAdmin = async function(){
+      const result = await baseRefresh.apply(this,arguments);
+      renderDirectory();
+      return result;
+    };
+  }
 })();
