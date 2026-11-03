@@ -34,6 +34,11 @@ jobs:
           test -f frontend/index.html
           test -f frontend/css/style.css
           test -f frontend/js/app.js
+          test -f frontend/admin/index.html
+          test -f frontend/admin/admin.js
+          test -f frontend/admin/pro-dashboard.js
+          test -f frontend/admin/user-data.js
+          test -f frontend/admin.html
           touch frontend/.nojekyll
           echo "Website entry file and required assets are present."
 
