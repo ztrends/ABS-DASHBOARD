@@ -133,10 +133,18 @@
   });
 
   const originalShowView = window.showView;
-  if(typeof originalShowView === 'function'){
-    window.showView = function(name){
-      originalShowView(name);
-      if(name === 'user-data') renderDirectory();
-    };
-  }
+  window.showView = function(name){
+    if(name !== 'user-data'){
+      if(typeof originalShowView === 'function') return originalShowView(name);
+      return;
+    }
+    document.querySelectorAll('.view').forEach(view => view.classList.toggle('active',view.dataset.view === name));
+    document.querySelectorAll('.nav-link[data-view]').forEach(link => link.classList.toggle('active',link.dataset.view === name));
+    const title = byId('topViewTitle');
+    if(title) title.textContent = 'User Data';
+    const search = byId('globalSearch');
+    if(search) search.value = '';
+    window.scrollTo({top:0,behavior:'smooth'});
+    renderDirectory();
+  };
 })();
