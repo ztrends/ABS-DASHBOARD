@@ -235,11 +235,11 @@ async function restoreFirebaseUserSession(authUser){
   // second device must never win over a richer local or legacy profile copy.
   // Once the cloud has real records it is authoritative. Never let an older
   // device-local copy replace newer central data merely because it has more rows.
+  const cloudCount=financialRecordCount(cloudData);
   const fallbackCandidates=[legacyProfileData,localData].filter(Boolean);
   fallbackCandidates.sort((a,b)=>financialRecordCount(b)-financialRecordCount(a));
   const bestData=cloudCount>0?cloudData:(fallbackCandidates[0]||cloudData||EMPTY_DATA());
   const bestCount=financialRecordCount(bestData);
-  const cloudCount=financialRecordCount(cloudData);
   const profileHasHistory=profileHasFinancialHistory(profile);
 
   state.data=bestData;
@@ -247,10 +247,16 @@ async function restoreFirebaseUserSession(authUser){
 
   // Migrate only when a real record set is available. Never create or upload
   // an empty dataset when the account profile proves that financial history exists.
-  if(bestCount>0&&(!cloudExists||bestCount>cloudCount)){
-    await privateRef.set(bestData,{merge:true});
+  if(cloudCount===0&&bestCount>0){
+    try{
+      await customerCloudRequest("PUT",{data:bestData,expectedRevision:Number(state.cloudRevision||0),allowEmptyReset:false});
+    }catch(migrationError){
+      console.warn("ABS data migration through customer API failed; keeping the existing protected Firestore fallback:",migrationError);
+      await privateRef.set({...bestData,_absRevision:Number(state.cloudRevision||0)},{merge:true});
+    }
   }else if(!cloudExists&&!profileHasHistory){
-    await privateRef.set(bestData,{merge:true});
+    try{await customerCloudRequest("PUT",{data:bestData,expectedRevision:Number(state.cloudRevision||0),allowEmptyReset:false})}
+    catch(createError){await privateRef.set(bestData,{merge:true})}
   }
 
   state.user=user;
