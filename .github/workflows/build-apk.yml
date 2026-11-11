@@ -247,44 +247,147 @@ jobs:
           p.write_text(s)
           PYPDF
 
-      - name: Add native APK update handoff
+      - name: Add native Android in-app APK downloader and installer
         run: |
           cd frontend/android
-          python3 - <<'PY'
+          python3 - <<'PYUPDATE'
           from pathlib import Path
+          import re
           p = Path('app/src/main/java/com/absdashboard/app/MainActivity.java')
           s = p.read_text()
-          imports = ['import android.content.Intent;', 'import android.net.Uri;', 'import android.webkit.JavascriptInterface;']
-          first_line_end = s.find('\n')
+          imports = [
+              'import android.app.DownloadManager;',
+              'import android.content.BroadcastReceiver;',
+              'import android.content.Context;',
+              'import android.content.IntentFilter;',
+              'import android.content.pm.PackageManager;',
+              'import android.net.Uri;',
+              'import android.os.Build;',
+              'import android.os.Environment;',
+              'import android.provider.Settings;',
+              'import android.webkit.JavascriptInterface;',
+              'import android.widget.Toast;',
+          ]
+          first_line_end = s.find('\\n')
           if first_line_end < 0:
               raise SystemExit('MainActivity package declaration missing')
-          additions = ''.join('\n' + item for item in imports if item not in s)
+          additions = ''.join('\\n' + item for item in imports if item not in s)
           if additions:
               s = s[:first_line_end] + additions + s[first_line_end:]
           marker = 'getBridge().getWebView().addJavascriptInterface(new AbsShareBridge(), "AbsShare");'
           if marker not in s:
               raise SystemExit('AbsShare bridge registration not found')
-          if 'addJavascriptInterface(new AbsUpdaterBridge(), "AbsUpdater")' not in s:
-              s = s.replace(marker, marker + '\n                      getBridge().getWebView().addJavascriptInterface(new AbsUpdaterBridge(), "AbsUpdater");', 1)
+          receiver_registration = '''
+                      if (apkDownloadReceiver != null) {
+                          IntentFilter apkFilter = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+                          if (Build.VERSION.SDK_INT >= 33) {
+                              registerReceiver(apkDownloadReceiver, apkFilter, Context.RECEIVER_EXPORTED);
+                          } else {
+                              registerReceiver(apkDownloadReceiver, apkFilter);
+                          }
+                      }'''
+          if 'registerReceiver(apkDownloadReceiver' not in s:
+              s = s.replace(marker, marker + receiver_registration, 1)
           if 'class AbsUpdaterBridge' not in s:
               i = s.rfind('}')
               block = '''
+              private Uri pendingApkInstallUri;
+
+              private final BroadcastReceiver apkDownloadReceiver = new BroadcastReceiver() {
+                  @Override
+                  public void onReceive(Context context, Intent intent) {
+                      if (!DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) return;
+                      long completedId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L);
+                      DownloadManager manager = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                      DownloadManager.Query query = new DownloadManager.Query().setFilterById(completedId);
+                      try (android.database.Cursor cursor = manager.query(query)) {
+                          if (cursor == null || !cursor.moveToFirst()) return;
+                          int status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                          if (status != DownloadManager.STATUS_SUCCESSFUL) {
+                              Toast.makeText(MainActivity.this, "APK download failed. Please try again.", Toast.LENGTH_LONG).show();
+                              return;
+                          }
+                          Uri apkUri = manager.getUriForDownloadedFile(completedId);
+                          if (apkUri == null) {
+                              Toast.makeText(MainActivity.this, "Downloaded APK could not be opened.", Toast.LENGTH_LONG).show();
+                              return;
+                          }
+                          installDownloadedApk(apkUri);
+                      } catch (Exception error) {
+                          Toast.makeText(MainActivity.this, "Could not open the downloaded update.", Toast.LENGTH_LONG).show();
+                      }
+                  }
+              };
+
+              private void installDownloadedApk(Uri apkUri) {
+                  try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                          !getPackageManager().canRequestPackageInstalls()) {
+                          pendingApkInstallUri = apkUri;
+                          Intent settingsIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                              Uri.parse("package:" + getPackageName()));
+                          startActivityForResult(settingsIntent, 991);
+                          Toast.makeText(this, "Allow ABS Dashboard to install updates, then return to the app.", Toast.LENGTH_LONG).show();
+                          return;
+                      }
+                      Intent installIntent = new Intent(Intent.ACTION_VIEW);
+                      installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+                      installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                      startActivity(installIntent);
+                  } catch (Exception error) {
+                      Toast.makeText(this, "Open Downloads and tap the ABS DASHBOARD APK to install.", Toast.LENGTH_LONG).show();
+                  }
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode == 991 && pendingApkInstallUri != null) {
+                      Uri apkUri = pendingApkInstallUri;
+                      pendingApkInstallUri = null;
+                      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || getPackageManager().canRequestPackageInstalls()) {
+                          installDownloadedApk(apkUri);
+                      } else {
+                          Toast.makeText(this, "Update not installed. Allow ABS Dashboard to install unknown apps in Settings.", Toast.LENGTH_LONG).show();
+                      }
+                  }
+              }
+
               private class AbsUpdaterBridge {
                   @JavascriptInterface
-                  public void openDownload(String url) {
-                      if (url == null || !url.startsWith("https://github.com/ztrends/ABS-DASHBOARD/releases/")) return;
+                  public void downloadAndInstall(String url, String version) {
+                      if (url == null || !url.startsWith("https://github.com/ztrends/ABS-DASHBOARD/releases/download/")) return;
                       runOnUiThread(() -> {
-                          Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                          startActivity(intent);
+                          try {
+                              String safeVersion = (version == null ? "latest" : version).replaceAll("[^0-9A-Za-z._-]", "");
+                              DownloadManager manager = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                              DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                              request.setTitle("ABS DASHBOARD update");
+                              request.setDescription("Downloading app version " + safeVersion);
+                              request.setMimeType("application/vnd.android.package-archive");
+                              request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                              request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "ABS-DASHBOARD-v" + safeVersion + ".apk");
+                              manager.enqueue(request);
+                              Toast.makeText(MainActivity.this, "Update downloading. You will be asked to install it when the download finishes.", Toast.LENGTH_LONG).show();
+                          } catch (Exception error) {
+                              Toast.makeText(MainActivity.this, "Could not start APK download. Please try again.", Toast.LENGTH_LONG).show();
+                          }
                       });
                   }
               }
               '''
-              s = s[:i] + block + '\n' + s[i:]
+              s = s[:i] + block + '\\n' + s[i:]
+          else:
+              raise SystemExit('Unexpected pre-existing AbsUpdaterBridge; refusing to overwrite it')
           p.write_text(s)
-          PY
 
+          manifest = Path('app/src/main/AndroidManifest.xml')
+          m = manifest.read_text()
+          permission = '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'
+          if permission not in m:
+              m = re.sub(r'(<manifest[^>]*>)', r'\\1\\n    ' + permission, m, count=1)
+              manifest.write_text(m)
+          PYUPDATE
       - name: Ensure Android and Maven Central repositories
         run: |
           cd frontend/android
