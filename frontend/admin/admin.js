@@ -2,7 +2,7 @@ const API_BASE = 'https://abs-dashboard-t7up.onrender.com/api';
 
 const $ = id => document.getElementById(id);
 let adminToken = sessionStorage.getItem('abs_admin_token') || '';
-let state = { users: [], feedback: [], ads: [], notifications: [], supportRequests: [], summary: {} };
+let state = { users: [], feedback: [], ads: [], notifications: [], supportRequests: [], appUpdate: null, summary: {} };
 let refreshInProgress = false;
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({
@@ -109,11 +109,12 @@ async function refreshAdmin(){
     state.users = Array.isArray(usersResponse.items) ? usersResponse.items : [];
 
     const warnings = [];
-    const [adsResult, feedbackResult, notificationsResult, supportResult] = await Promise.allSettled([
+    const [adsResult, feedbackResult, notificationsResult, supportResult, appUpdateResult] = await Promise.allSettled([
       api('/admin/ads'),
       api('/admin/feedback'),
       api('/admin/notifications'),
-      api('/admin/support-requests')
+      api('/admin/support-requests'),
+      api('/admin/app-update')
     ]);
     if(adsResult.status === 'fulfilled') state.ads = Array.isArray(adsResult.value.items) ? adsResult.value.items : [];
     else { state.ads = []; warnings.push(`banners: ${adsResult.reason?.message || 'failed'}`); }
@@ -123,6 +124,9 @@ async function refreshAdmin(){
     else { state.notifications = []; warnings.push(`notifications: ${notificationsResult.reason?.message || 'failed'}`); }
     if(supportResult.status === 'fulfilled') state.supportRequests = Array.isArray(supportResult.value.items) ? supportResult.value.items : [];
     else { state.supportRequests = []; warnings.push(`support requests: ${supportResult.reason?.message || 'failed'}`); }
+    if(appUpdateResult.status === 'fulfilled') state.appUpdate = appUpdateResult.value.item || null;
+    else { state.appUpdate = null; warnings.push(`app update: ${appUpdateResult.reason?.message || 'failed'}`); }
+    renderAppUpdate();
 
     state.summary = {
       users: state.users.length,
@@ -586,6 +590,18 @@ function closeModal(){
 
 // Bind the login form explicitly. Without this handler, the browser submits
 // the HTML form and reloads the page instead of calling the Render login API.
+function renderAppUpdate(){
+  const host=$('appUpdateCurrent');if(!host)return;const u=state.appUpdate;
+  host.innerHTML=u&&u.active?`<div class="ad"><div class="adtitle">Version ${esc(u.version)} · ACTIVE</div><div class="sub">Published ${esc(formatDate(u.updatedAt))}</div><p>${esc(u.title||'ABS DASHBOARD update available')}<br>${esc(u.message||'')}</p><p><a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a></p></div>`:'<div class="empty">No app update link published yet.</div>';
+  if($('appUpdateVersion'))$('appUpdateVersion').value=u?.version||'';if($('appUpdateUrl'))$('appUpdateUrl').value=u?.url||'';if($('appUpdateTitle'))$('appUpdateTitle').value=u?.title||'ABS DASHBOARD update available';if($('appUpdateMessage'))$('appUpdateMessage').value=u?.message||'A new version is ready. Tap Update App to install it.';
+}
+async function saveAppUpdate(){
+  const msg=$('appUpdateMsg'),version=Number($('appUpdateVersion')?.value),url=$('appUpdateUrl')?.value.trim(),title=$('appUpdateTitle')?.value.trim(),message=$('appUpdateMessage')?.value.trim();
+  if(!Number.isInteger(version)||version<1){msg.textContent='Enter a valid whole-number app version.';return;}
+  if(!url||!/^https:\/\//i.test(url)||!(/\.apk(?:$|[?#])/i.test(url))){msg.textContent='Enter a valid HTTPS APK download link.';return;}
+  try{const result=await api('/admin/app-update',{method:'PUT',body:JSON.stringify({version,url,title,message})});state.appUpdate=result.item||null;renderAppUpdate();msg.textContent='Update published. Users will see it in Notifications and Update App.';setAdminRefreshStatus('App update link published successfully.');}
+  catch(e){msg.textContent=e.message||'Unable to publish app update.';}
+}
 function renderAdminNotifications(){
   const host=$('notifications');if(!host)return;
   host.innerHTML=state.notifications.length?state.notifications.map(n=>`<div class="ad"><div class="adtitle">${esc(n.title||'ABS Update')}</div><div class="sub">${esc(formatDate(n.created_at))} · ${esc(n.type||'announcement')}</div><p>${esc(n.message||'')}</p>${n.link?`<p><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.link)}</a></p>`:''}<div class="ad-actions"><button class="btn danger" onclick="deleteNotification(${Number(n.id)})">DELETE NOTICE</button></div></div>`).join(''):'<div class="empty">No broadcast notifications yet.</div>';
@@ -637,6 +653,7 @@ window.saveUser = saveUser;
 window.createUser = createUser;
 window.openAdModal = openAdModal;
 window.openNotificationModal = openNotificationModal;
+window.saveAppUpdate = saveAppUpdate;
 window.saveNotification = saveNotification;
 window.deleteNotification = deleteNotification;
 window.updateSupportStatus = updateSupportStatus;
