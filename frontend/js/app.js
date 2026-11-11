@@ -152,6 +152,20 @@ function normalizeFinancialData(raw){
   return data;
 }
 
+function financialRecordCount(data){
+  if(!data||typeof data!=="object")return 0;
+  return ["income","expenses","loans","emi","people","ledger","career"].reduce((n,key)=>n+(Array.isArray(data[key])?data[key].length:0),0);
+}
+function financialDataFromProfile(profile){
+  const keys=["income","expenses","loans","emi","people","ledger","career"];
+  if(!profile||!keys.some(key=>Array.isArray(profile[key])))return null;
+  return normalizeFinancialData(profile);
+}
+function profileHasFinancialHistory(profile){
+  if(!profile||typeof profile!=="object")return false;
+  return Number(profile.entries||0)>0||Number(profile.income||0)!==0||Number(profile.expense||0)!==0||Number(profile.net||0)!==0;
+}
+
 async function restoreFirebaseUserSession(authUser){
   if(!firebaseAdminReady()||!authUser)return false;
   const db=firebase.firestore();
@@ -173,24 +187,33 @@ async function restoreFirebaseUserSession(authUser){
 
   let localData=null;
   if(mobile){
-    try{localData=JSON.parse(localStorage.getItem("abs_data_"+mobile)||"null")}catch(_){}
+    try{localData=normalizeFinancialData(JSON.parse(localStorage.getItem("abs_data_"+mobile)||"null"))}catch(_){}
   }
+  const cloudData=dataSnap.exists?normalizeFinancialData(dataSnap.data()):null;
+  const legacyProfileData=financialDataFromProfile(profile);
+  // Pick the copy containing the most actual records. An empty document on a
+  // second device must never win over a richer local or legacy profile copy.
+  const candidates=[cloudData,legacyProfileData,localData].filter(Boolean);
+  candidates.sort((a,b)=>financialRecordCount(b)-financialRecordCount(a));
+  const bestData=candidates[0]||EMPTY_DATA();
+  const bestCount=financialRecordCount(bestData);
+  const cloudCount=financialRecordCount(cloudData);
+  const profileHasHistory=profileHasFinancialHistory(profile);
 
-  // Firestore is the source of truth. A device's local cache is used only
-  // when no cloud document exists yet, so an empty device cannot reset old records.
-  if(dataSnap.exists){
-    state.data=normalizeFinancialData(dataSnap.data());
-  }else if(localData&&typeof localData==="object"){
-    state.data=normalizeFinancialData(localData);
-    await privateRef.set(state.data,{merge:true});
-  }else{
-    state.data=EMPTY_DATA();
-    await privateRef.set(state.data,{merge:true});
+  state.data=bestData;
+  state.cloudDataNeedsRecovery=profileHasHistory&&bestCount===0;
+
+  // Migrate only when a real record set is available. Never create or upload
+  // an empty dataset when the account profile proves that financial history exists.
+  if(bestCount>0&&(!dataSnap.exists||bestCount>cloudCount)){
+    await privateRef.set(bestData,{merge:true});
+  }else if(!dataSnap.exists&&!profileHasHistory){
+    await privateRef.set(bestData,{merge:true});
   }
 
   state.user=user;
   persistSession(user);
-  if(mobile)localStorage.setItem("abs_data_"+mobile,JSON.stringify(state.data));
+  if(mobile&&bestCount>0)localStorage.setItem("abs_data_"+mobile,JSON.stringify(bestData));
 
   const users=userRegistry();
   let record=users.find(x=>x.uid===authUser.uid||x.mobile===mobile);
@@ -210,6 +233,9 @@ async function restoreFirebaseUserSession(authUser){
   watchUserProfile(authUser);
   watchUserData(authUser);
   refreshNotificationBadge();
+  if(state.cloudDataNeedsRecovery){
+    toast("Your saved financial history is protected, but its transaction records need recovery from the original device. No empty data was uploaded.",7000);
+  }
   return true;
 }
 
@@ -222,7 +248,9 @@ function watchUserData(authUser){
     .onSnapshot(snapshot=>{
       if(snapshot.metadata?.fromCache||!snapshot.exists||state.user?.uid!==authUser.uid)return;
       const incoming=normalizeFinancialData(snapshot.data());
+      if(state.cloudDataNeedsRecovery&&financialRecordCount(incoming)===0)return;
       state.data=incoming;
+      if(financialRecordCount(incoming)>0)state.cloudDataNeedsRecovery=false;
       const mobile=state.user.mobile;
       if(mobile)localStorage.setItem("abs_data_"+mobile,JSON.stringify(incoming));
       if(!document.hidden)render();
@@ -285,10 +313,21 @@ async function refreshAppData(){
     const snap=await firebase.firestore().collection("users").doc(uid).collection("private").doc("data").get({source:"server"});
     if(state.user?.uid!==uid)return;
     if(snap.exists){
-      state.data=normalizeFinancialData(snap.data());
+      const incoming=normalizeFinancialData(snap.data());
+      if(state.cloudDataNeedsRecovery&&financialRecordCount(incoming)===0){
+        toast("Cloud data is incomplete. Existing financial history was protected; no empty overwrite was made.",5000);
+        return;
+      }
+      state.data=incoming;
+      if(financialRecordCount(incoming)>0)state.cloudDataNeedsRecovery=false;
       localStorage.setItem(dataKey(),JSON.stringify(state.data));
     }else{
-      // Never clear an existing local backup just because a cloud read returned no document.
+      // Do not manufacture an empty cloud dataset for an account whose profile
+      // still reports saved financial history.
+      if(state.cloudDataNeedsRecovery){
+        toast("Saved financial history needs recovery. No empty data was uploaded.",5000);
+        return;
+      }
       ensureData();
       await firebase.firestore().collection("users").doc(uid).collection("private").doc("data").set(state.data,{merge:true});
     }
