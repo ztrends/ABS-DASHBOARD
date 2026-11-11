@@ -433,3 +433,13 @@ body.ai-open .ai-chat-composer{bottom:82px}
 .abs-food-panel .primary{background:#3867d6!important;color:#fff!important;border:1px solid #3867d6!important}
 @media(max-width:420px){.abs-calculator-options{grid-template-columns:1fr}.abs-calc-option{min-height:145px}.abs-receipt{padding:15px 13px}.abs-receipt-day{grid-template-columns:70px 1fr}}
 @media print{.abs-receipt{box-shadow:none;margin:0 auto;width:100%;max-width:320px}.receipt-actions{display:none!important}}
+
+/* User-managed food bill quick amounts */
+.abs-quick-amounts{display:flex;flex-wrap:wrap;gap:8px;margin:13px 0 10px}
+.abs-quick-amount-item{display:inline-flex;align-items:stretch;border:1px solid rgba(123,104,255,.28);border-radius:12px;overflow:hidden;background:rgba(123,104,255,.1)}
+.abs-quick-amount-item .abs-quick-pick{min-height:39px;padding:0 11px;border:0;background:transparent;color:#c3bbff;font-weight:850;font-size:12px}
+.abs-quick-amount-item .abs-quick-remove{width:25px;border:0;border-left:1px solid rgba(123,104,255,.22);background:rgba(255,100,120,.08);color:#ff9eae;font-size:17px;line-height:1}
+.abs-quick-amount-add{display:flex;gap:8px;margin:9px 0 5px}
+.abs-quick-amount-add input{min-width:0;flex:1;height:42px;padding:9px 11px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.055);color:inherit;font-size:13px}
+.abs-quick-amount-add button{flex:0 0 auto;padding:0 14px;border-radius:11px;background:rgba(37,215,194,.14);border:1px solid rgba(37,215,194,.28);color:#54e0cf;font-size:10px;font-weight:900}
+.abs-quick-help{display:block;margin:3px 0 15px;color:var(--muted);font-size:9px;line-height:1.45}
