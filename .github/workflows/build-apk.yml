@@ -53,28 +53,6 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Set increasing Android app version
-        env:
-          VERSION_CODE: ${{ github.run_number }}
-        run: |
-          cd frontend/android
-          python3 - <<'PYVER'
-          from pathlib import Path
-          import os, re
-          p = Path('app/build.gradle')
-          s = p.read_text()
-          version = int(os.environ['VERSION_CODE'])
-          if not re.search(r'versionCode\s+\d+', s):
-              raise SystemExit('Could not find Android versionCode in app/build.gradle')
-          s = re.sub(r'versionCode\s+\d+', f'versionCode {version}', s, count=1)
-          if not re.search(r'versionName\s+"[^"]+"', s):
-              raise SystemExit('Could not find Android versionName in app/build.gradle')
-          s = re.sub(r'versionName\s+"[^"]+"', f'versionName "1.0.{version}"', s, count=1)
-          p.write_text(s)
-          print(f'Android versionCode={version}, versionName=1.0.{version}')
-          PYVER
-
-     
       - name: Stamp APK build version
         env:
           ABS_BUILD_VERSION: \${{ github.run_number }}
