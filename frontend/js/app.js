@@ -586,7 +586,46 @@ $("#loginForm").onsubmit=async e=>{
 };
 
 $("#themeBtn").onclick=()=>{state.theme=state.theme==="dark"?"light":"dark";localStorage.setItem("abs_theme",state.theme);setup()};
+
 $("#refreshBtn").onclick=refreshAppData;
+function installABSPullToRefresh(){
+  if(window.__absPullRefreshInstalled)return;
+  window.__absPullRefreshInstalled=true;
+  let startX=0,startY=0,pulling=false,refreshing=false;
+  const indicator=document.createElement("div");
+  indicator.id="absPullRefreshIndicator";
+  indicator.setAttribute("role","status");
+  indicator.setAttribute("aria-live","polite");
+  indicator.textContent="↓ Pull to refresh";
+  document.body.appendChild(indicator);
+  const hide=()=>{indicator.classList.remove("visible","ready","loading");indicator.textContent="↓ Pull to refresh";pulling=false;};
+  document.addEventListener("touchstart",e=>{
+    if(!state.user||refreshing||e.touches.length!==1)return;
+    if(document.querySelector(".modal-backdrop:not(.hidden),.modal:not(.hidden),.wa-chat,.ai-new-body"))return;
+    if(window.scrollY>1||document.documentElement.scrollTop>1)return;
+    startX=e.touches[0].clientX;startY=e.touches[0].clientY;pulling=true;
+  },{passive:true});
+  document.addEventListener("touchmove",e=>{
+    if(!pulling||refreshing||e.touches.length!==1)return;
+    const dx=e.touches[0].clientX-startX,dy=e.touches[0].clientY-startY;
+    if(dy<0||Math.abs(dx)>Math.abs(dy)){hide();return;}
+    if(dy>8)e.preventDefault();
+    indicator.classList.add("visible");
+    if(dy>=76){indicator.classList.add("ready");indicator.textContent="↻ Release to refresh";}
+    else{indicator.classList.remove("ready");indicator.textContent="↓ Pull to refresh";}
+  },{passive:false});
+  const finish=async e=>{
+    if(!pulling)return;
+    const dy=e.changedTouches?.[0]?.clientY-startY;
+    const shouldRefresh=Number(dy)>=76&&!refreshing;
+    if(!shouldRefresh){hide();return;}
+    refreshing=true;indicator.classList.remove("ready");indicator.classList.add("visible","loading");indicator.textContent="↻ Refreshing ABS…";
+    try{await refreshAppData();}finally{refreshing=false;hide();}
+  };
+  document.addEventListener("touchend",finish,{passive:true});
+  document.addEventListener("touchcancel",hide,{passive:true});
+}
+installABSPullToRefresh();
 function goTab(tab){try{state.tab=tab||"dashboard";document.querySelectorAll(".nav-item").forEach(x=>x.classList.toggle("active",x.dataset.tab===state.tab));render();}catch(err){console.error("ABS navigation error",err);if(state.tab==="profile")renderProfile();else toast("Unable to open this section. Please try again.")}}
 document.querySelectorAll(".nav-item").forEach(b=>{b.type="button";b.addEventListener("click",e=>{e.preventDefault();goTab(b.dataset.tab);});});
 function openAvatarCrop(file,onSave){
