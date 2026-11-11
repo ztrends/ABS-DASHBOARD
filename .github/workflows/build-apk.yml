@@ -2,6 +2,12 @@
 name: Build ABS DASHBOARD APK
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
 
 permissions:
