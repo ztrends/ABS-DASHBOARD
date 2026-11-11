@@ -20,8 +20,9 @@ async function customerCloudRequest(method="GET",body=null){
   });
   let result={};
   try{result=await response.json()}catch(_){}
-  if(!response.ok)throw new Error(result.error||`Cloud data request failed (${response.status})`);
+  if(!response.ok){const error=new Error(result.error||`Cloud data request failed (${response.status})`);error.status=response.status;throw error;}
   if(result.uid&&result.uid!==authUser.uid)throw new Error("Cloud account UID mismatch. Data was not loaded.");
+  if(method==="PUT"&&Number.isFinite(Number(result.revision)))state.cloudRevision=Number(result.revision);
   return result;
 }
 
@@ -105,10 +106,15 @@ const save=async()=>{
   try{
     await customerCloudRequest("PUT",{
       data:state.data,
+      expectedRevision:Number(state.cloudRevision||0),
       allowEmptyReset:state.allowEmptyCloudReset===true
     });
     state.allowEmptyCloudReset=false;
   }catch(apiError){
+    if(apiError.status===409){
+      toast(apiError.message||"Cloud data changed on another device. Refresh before saving.",6500);
+      return false;
+    }
     // Keep a secure Firestore fallback if the Render API is temporarily down.
     console.warn("ABS customer cloud API save failed; using authenticated Firestore fallback:",apiError);
     try{
@@ -198,6 +204,7 @@ async function restoreFirebaseUserSession(authUser){
     profile=account.profile||{};
     cloudRaw=account.data||null;
     cloudExists=account.hasData===true;
+    state.cloudRevision=Number(account.revision||0);
   }catch(apiError){
     console.warn("ABS customer cloud API read failed; trying authenticated Firestore read:",apiError);
     const [profileSnap,dataSnap]=await Promise.all([userRef.get({source:"server"}),privateRef.get({source:"server"})]);
@@ -226,9 +233,11 @@ async function restoreFirebaseUserSession(authUser){
   const legacyProfileData=financialDataFromProfile(profile);
   // Pick the copy containing the most actual records. An empty document on a
   // second device must never win over a richer local or legacy profile copy.
-  const candidates=[cloudData,legacyProfileData,localData].filter(Boolean);
-  candidates.sort((a,b)=>financialRecordCount(b)-financialRecordCount(a));
-  const bestData=candidates[0]||EMPTY_DATA();
+  // Once the cloud has real records it is authoritative. Never let an older
+  // device-local copy replace newer central data merely because it has more rows.
+  const fallbackCandidates=[legacyProfileData,localData].filter(Boolean);
+  fallbackCandidates.sort((a,b)=>financialRecordCount(b)-financialRecordCount(a));
+  const bestData=cloudCount>0?cloudData:(fallbackCandidates[0]||cloudData||EMPTY_DATA());
   const bestCount=financialRecordCount(bestData);
   const cloudCount=financialRecordCount(cloudData);
   const profileHasHistory=profileHasFinancialHistory(profile);
@@ -281,6 +290,7 @@ function watchUserData(authUser){
     .onSnapshot(snapshot=>{
       if(snapshot.metadata?.fromCache||!snapshot.exists||state.user?.uid!==authUser.uid)return;
       const incoming=normalizeFinancialData(snapshot.data());
+      state.cloudRevision=Number(snapshot.data()?._absRevision||state.cloudRevision||0);
       if(state.cloudDataNeedsRecovery&&financialRecordCount(incoming)===0)return;
       state.data=incoming;
       if(financialRecordCount(incoming)>0)state.cloudDataNeedsRecovery=false;
@@ -349,6 +359,7 @@ async function refreshAppData(){
       if(account.uid!==uid)throw new Error("Cloud account UID mismatch.");
       remoteData=account.data||null;
       remoteExists=account.hasData===true;
+      state.cloudRevision=Number(account.revision||0);
     }catch(apiError){
       console.warn("ABS customer cloud API refresh failed; using Firestore fallback:",apiError);
       const snap=await firebase.firestore().collection("users").doc(uid).collection("private").doc("data").get({source:"server"});
@@ -358,6 +369,7 @@ async function refreshAppData(){
     if(state.user?.uid!==uid)return;
     if(remoteExists){
       const incoming=normalizeFinancialData(remoteData);
+      state.cloudRevision=Number(remoteData?._absRevision||state.cloudRevision||0);
       if(state.cloudDataNeedsRecovery&&financialRecordCount(incoming)===0){
         toast("Cloud data is incomplete. Existing financial history was protected; no empty overwrite was made.",5000);
         return;
