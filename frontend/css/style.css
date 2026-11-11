@@ -443,3 +443,10 @@ body.ai-open .ai-chat-composer{bottom:82px}
 .abs-quick-amount-add input{min-width:0;flex:1;height:42px;padding:9px 11px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.055);color:inherit;font-size:13px}
 .abs-quick-amount-add button{flex:0 0 auto;padding:0 14px;border-radius:11px;background:rgba(37,215,194,.14);border:1px solid rgba(37,215,194,.28);color:#54e0cf;font-size:10px;font-weight:900}
 .abs-quick-help{display:block;margin:3px 0 15px;color:var(--muted);font-size:9px;line-height:1.45}
+
+/* Native-feel pull-to-refresh indicator */
+#absPullRefreshIndicator{position:fixed;z-index:240;top:calc(env(safe-area-inset-top,0px) + 8px);left:50%;transform:translate(-50%,-75px);opacity:0;pointer-events:none;padding:10px 16px;border-radius:999px;background:rgba(18,25,42,.96);border:1px solid rgba(255,255,255,.13);box-shadow:0 8px 28px rgba(0,0,0,.28);color:#f5f7ff;font-size:11px;font-weight:800;white-space:nowrap;transition:transform .18s ease,opacity .18s ease}
+#absPullRefreshIndicator.visible{transform:translate(-50%,0);opacity:1}
+#absPullRefreshIndicator.ready{background:rgba(45,37,112,.97);border-color:rgba(157,146,255,.5)}
+#absPullRefreshIndicator.loading{background:rgba(12,76,69,.97);border-color:rgba(53,215,196,.45)}
+body.light #absPullRefreshIndicator{background:rgba(255,255,255,.97);color:#182033;border-color:rgba(20,30,50,.12)}
