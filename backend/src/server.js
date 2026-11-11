@@ -91,7 +91,8 @@ app.get('/api/customer/account-data',firebaseUserAuth,async(req,res)=>{
     const [profileSnap,dataSnap]=await Promise.all([userRef.get(),userRef.collection('private').doc('data').get()]);
     if(!profileSnap.exists)return res.status(404).json({error:'ABS account profile was not found for this login.'});
     res.set('Cache-Control','no-store');
-    res.json({ok:true,uid:req.firebaseUser.uid,profile:profileSnap.data()||{},hasData:dataSnap.exists,data:dataSnap.exists?(dataSnap.data()||{}):null});
+    const data=dataSnap.exists?(dataSnap.data()||{}):null;
+    res.json({ok:true,uid:req.firebaseUser.uid,profile:profileSnap.data()||{},hasData:dataSnap.exists,revision:Number(data?._absRevision||0),data});
   }catch(e){publicAdminError(res,e)}
 });
 app.put('/api/customer/account-data',firebaseUserAuth,async(req,res)=>{
@@ -101,21 +102,37 @@ app.put('/api/customer/account-data',firebaseUserAuth,async(req,res)=>{
     const sdk=getFirebaseAdmin();
     const userRef=sdk.firestore().collection('users').doc(req.firebaseUser.uid);
     const privateRef=userRef.collection('private').doc('data');
-    const currentSnap=await privateRef.get();
-    const current=currentSnap.exists?(currentSnap.data()||{}):{};
-    const currentCount=absFinancialRecordCount(current);
-    const incomingCount=absFinancialRecordCount(incoming);
-    if(currentCount>0&&incomingCount===0&&req.body.allowEmptyReset!==true){
-      return res.status(409).json({error:'Cloud financial records already exist. Empty data was rejected to protect the account.'});
-    }
-    await privateRef.set(incoming,{merge:false});
+    const expectedRevision=Number(req.body.expectedRevision||0);
+    const allowEmptyReset=req.body.allowEmptyReset===true;
+    const nowIso=new Date().toISOString();
+    let nextRevision=0;
+    await sdk.firestore().runTransaction(async tx=>{
+      const currentSnap=await tx.get(privateRef);
+      const current=currentSnap.exists?(currentSnap.data()||{}):{};
+      const currentRevision=Number(current._absRevision||0);
+      const currentCount=absFinancialRecordCount(current);
+      const incomingCount=absFinancialRecordCount(incoming);
+      if(expectedRevision!==currentRevision){
+        const err=new Error('Your ABS data changed on another device. Refresh cloud data before saving so no newer records are lost.');
+        err.status=409;throw err;
+      }
+      if(currentCount>0&&incomingCount===0&&!allowEmptyReset){
+        const err=new Error('Cloud financial records already exist. Empty data was rejected to protect the account.');
+        err.status=409;throw err;
+      }
+      nextRevision=currentRevision+1;
+      tx.set(privateRef,{...incoming,_absRevision:nextRevision,_absUpdatedAt:nowIso},{merge:false});
+    });
     const sum=key=>(Array.isArray(incoming[key])?incoming[key]:[]).reduce((n,x)=>n+Number(x.amount||0),0);
     const income=sum('income'),expense=sum('expenses'),emi=sum('emi');
     const entries=absFinancialRecordCount(incoming);
-    await userRef.set({income,expense,net:income-expense-emi,entries,lastActive:new Date().toISOString()},{merge:true});
+    await userRef.set({income,expense,net:income-expense-emi,entries,lastActive:nowIso},{merge:true});
     res.set('Cache-Control','no-store');
-    res.json({ok:true,saved:true,entries});
-  }catch(e){publicAdminError(res,e)}
+    res.json({ok:true,saved:true,entries,revision:nextRevision});
+  }catch(e){
+    if(e.status===409)return res.status(409).json({error:e.message});
+    publicAdminError(res,e);
+  }
 });
 app.get('/api/health',(req,res)=>res.json({ok:true,service:'ABS DASHBOARD API',time:now()}));
 app.post('/api/auth/register',(req,res)=>{const {name,mobile,password}=req.body||{};if(!name||!/^[6-9]\d{9}$/.test(String(mobile||''))||String(password||'').length<6)return res.status(400).json({error:'Name, valid 10-digit mobile and 6+ character password are required'});if(db.prepare('SELECT 1 FROM users WHERE mobile=?').get(mobile))return res.status(409).json({error:'Mobile number already registered'});const created=now(),hash=bcrypt.hashSync(password,12),absId=nextAbsId(String(mobile));const info=db.prepare('INSERT INTO users(abs_id,name,mobile,password_hash,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(absId,name,mobile,hash,created,created);const u=db.prepare('SELECT id,abs_id,name,mobile,verified,premium,avatar,created_at FROM users WHERE id=?').get(info.lastInsertRowid);res.status(201).json({user:u,token:sign(u)})});
