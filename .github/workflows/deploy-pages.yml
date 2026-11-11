@@ -34,6 +34,10 @@ jobs:
           test -f frontend/index.html
           test -f frontend/css/style.css
           test -f frontend/js/app.js
+          node --check frontend/js/app.js
+          node --check frontend/admin/admin.js
+          node --check frontend/admin/pro-dashboard.js
+          node --check frontend/admin/user-data.js
           test -f frontend/admin/index.html
           test -f frontend/admin/admin.js
           test -f frontend/admin/pro-dashboard.js
