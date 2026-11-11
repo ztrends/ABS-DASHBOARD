@@ -162,37 +162,6 @@ jobs:
           p.write_text(s)
           PYSHARE
 
-      - name: Add native APK update browser bridge
-        run: |
-          cd frontend/android
-          python3 - <<'PYUPD'
-          from pathlib import Path
-          p = Path('app/src/main/java/com/absdashboard/app/MainActivity.java')
-          s = p.read_text()
-          marker = 'getBridge().getWebView().addJavascriptInterface(new AbsShareBridge(), "AbsShare");'
-          hook = marker + '\n                      getBridge().getWebView().addJavascriptInterface(new AbsUpdaterBridge(), "AbsUpdater");'
-          if 'addJavascriptInterface(new AbsUpdaterBridge(), "AbsUpdater")' not in s:
-              if marker not in s:
-                  raise SystemExit('AbsShare bridge hook not found')
-              s = s.replace(marker, hook, 1)
-          if 'class AbsUpdaterBridge' not in s:
-              i = s.rfind('}')
-              block = '''
-              private class AbsUpdaterBridge {
-                  @JavascriptInterface
-                  public void openDownload(String url) {
-                      if (url == null || !url.startsWith("https://github.com/ztrends/ABS-DASHBOARD/releases/download/")) return;
-                      runOnUiThread(() -> {
-                          Intent intent = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
-                          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                          startActivity(intent);
-                      });
-                  }
-              }
-              '''
-              s = s[:i] + block + '\n' + s[i:]
-          p.write_text(s)
-          PYUPD
       - name: Add native PDF save bridge for Android Downloads
         run: |
           cd frontend/android
