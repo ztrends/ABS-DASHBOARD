@@ -359,7 +359,7 @@ jobs:
               private class AbsUpdaterBridge {
                   @JavascriptInterface
                   public void downloadAndInstall(String url, String version) {
-                      if (url == null || !url.startsWith("https://github.com/ztrends/ABS-DASHBOARD/releases/download/")) return;
+                      if (url == null || !url.startsWith("https://")) return;
                       runOnUiThread(() -> {
                           try {
                               String safeVersion = (version == null ? "latest" : version).replaceAll("[^0-9A-Za-z._-]", "");
