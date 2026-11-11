@@ -37,6 +37,32 @@
     window.scrollTo({top:0,behavior:'smooth'});
   };
 
+  // Robust delegated navigation: handles dynamically rendered nav items and
+  // prevents a stale/overlapping handler from swallowing the App Update click.
+  document.addEventListener('click', function(event){
+    const link = event.target.closest('.nav-link[data-view]');
+    if(!link) return;
+    const name = link.dataset.view;
+    if(!titles[name]) return;
+    event.preventDefault();
+    document.querySelectorAll('.view').forEach(view => {
+      view.classList.toggle('active', view.dataset.view === name);
+    });
+    document.querySelectorAll('.nav-link[data-view]').forEach(item => {
+      item.classList.toggle('active', item.dataset.view === name);
+    });
+    const heading = byId('topViewTitle');
+    if(heading) heading.textContent = titles[name];
+    const sidebar = byId('adminSidebar');
+    if(sidebar) sidebar.classList.remove('open');
+    const backdrop = byId('sidebarBackdrop');
+    if(backdrop) backdrop.classList.remove('visible');
+    if(name === 'app-update' && typeof window.renderAppUpdate === 'function') {
+      window.renderAppUpdate();
+    }
+    window.scrollTo({top:0, behavior:'smooth'});
+  }, true);
+
   function applySearch(inputId, render){
     const input = byId(inputId);
     if(!input || input.dataset.proBound === '1') return;
