@@ -268,10 +268,10 @@ jobs:
               'import android.webkit.JavascriptInterface;',
               'import android.widget.Toast;',
           ]
-          first_line_end = s.find('\\n')
+          first_line_end = s.find('\n')
           if first_line_end < 0:
               raise SystemExit('MainActivity package declaration missing')
-          additions = ''.join('\\n' + item for item in imports if item not in s)
+          additions = ''.join('\n' + item for item in imports if item not in s)
           if additions:
               s = s[:first_line_end] + additions + s[first_line_end:]
           marker = 'getBridge().getWebView().addJavascriptInterface(new AbsShareBridge(), "AbsShare");'
@@ -376,7 +376,7 @@ jobs:
                   }
               }
               '''
-              s = s[:i] + block + '\\n' + s[i:]
+              s = s[:i] + block + '\n' + s[i:]
           else:
               raise SystemExit('Unexpected pre-existing AbsUpdaterBridge; refusing to overwrite it')
           p.write_text(s)
@@ -385,7 +385,7 @@ jobs:
           m = manifest.read_text()
           permission = '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'
           if permission not in m:
-              m = re.sub(r'(<manifest[^>]*>)', r'\\1\\n    ' + permission, m, count=1)
+              m = re.sub(r'(<manifest[^>]*>)', r'\1\n    ' + permission, m, count=1)
               manifest.write_text(m)
           PYUPDATE
       - name: Ensure Android and Maven Central repositories
