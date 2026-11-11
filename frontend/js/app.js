@@ -5,6 +5,7 @@ function persistSession(user){localStorage.setItem("abs_user",JSON.stringify(use
 function clearSession(){localStorage.removeItem("abs_user");document.cookie="abs_session=; path=/; max-age=0; SameSite=Lax"}
 const state = {user:readSession(),tab:"dashboard",theme:localStorage.getItem("abs_theme")||"dark",data:null,admin:false,remoteAds:[],adsLoaded:false,adsLoading:false,adsFetchedAt:0,notifications:[]};
 let userProfileUnsubscribe = null;
+let userDataUnsubscribe = null;
 const ABS_PUBLIC_API_BASE = "https://abs-dashboard-t7up.onrender.com/api";
 
 // Initialize Firebase once the Firebase compat scripts and config from index.html are available.
@@ -133,7 +134,100 @@ function feedbackList(){return JSON.parse(localStorage.getItem("abs_feedback")||
 function saveFeedbackItem(item){const all=feedbackList();all.unshift(item);localStorage.setItem("abs_feedback",JSON.stringify(all))}
 function premiumRequests(){try{return JSON.parse(localStorage.getItem("abs_premium_requests")||"[]")}catch(e){return[]}}
 function isVerified(){return state.user?.verified===true}
-function stopUserProfileWatch(){if(userProfileUnsubscribe){userProfileUnsubscribe();userProfileUnsubscribe=null}}
+function stopUserDataWatch(){if(userDataUnsubscribe){userDataUnsubscribe();userDataUnsubscribe=null}}
+function stopUserProfileWatch(){if(userProfileUnsubscribe){userProfileUnsubscribe();userProfileUnsubscribe=null}stopUserDataWatch()}
+
+function normalizeFinancialData(raw){
+  const base=EMPTY_DATA();
+  const source=raw&&typeof raw==="object"?raw:{};
+  const data={...base,...source};
+  ["income","expenses","loans","emi","people","ledger","career"].forEach(key=>{
+    data[key]=Array.isArray(source[key])?source[key]:[];
+  });
+  data.settings={...base.settings,...(source.settings&&typeof source.settings==="object"?source.settings:{})};
+  data.settings.budgets=data.settings.budgets&&typeof data.settings.budgets==="object"?data.settings.budgets:{};
+  data.settings.categories=Array.isArray(data.settings.categories)?data.settings.categories:base.settings.categories.slice();
+  data.settings.incomeCategories=Array.isArray(data.settings.incomeCategories)?data.settings.incomeCategories:["Salary","Freelance","Business","Bonus","Interest","Gift","Other"];
+  data.settings.customCategories=Array.isArray(data.settings.customCategories)?data.settings.customCategories:[];
+  return data;
+}
+
+async function restoreFirebaseUserSession(authUser){
+  if(!firebaseAdminReady()||!authUser)return false;
+  const db=firebase.firestore();
+  const userRef=db.collection("users").doc(authUser.uid);
+  const privateRef=userRef.collection("private").doc("data");
+  const [profileSnap,dataSnap]=await Promise.all([userRef.get(),privateRef.get()]);
+  if(!profileSnap.exists)return false;
+
+  const profile=profileSnap.data()||{};
+  const mobile=String(profile.mobile||String(authUser.email||"").split("@")[0]||"").trim();
+  const user={
+    name:profile.name||"User",
+    mobile,
+    absId:profile.absId||profile.abs_id||"",
+    uid:authUser.uid,
+    verified:profile.verified===true,
+    premium:profile.premium===true
+  };
+
+  let localData=null;
+  if(mobile){
+    try{localData=JSON.parse(localStorage.getItem("abs_data_"+mobile)||"null")}catch(_){}
+  }
+
+  // Firestore is the source of truth. A device's local cache is used only
+  // when no cloud document exists yet, so an empty device cannot reset old records.
+  if(dataSnap.exists){
+    state.data=normalizeFinancialData(dataSnap.data());
+  }else if(localData&&typeof localData==="object"){
+    state.data=normalizeFinancialData(localData);
+    await privateRef.set(state.data,{merge:true});
+  }else{
+    state.data=EMPTY_DATA();
+    await privateRef.set(state.data,{merge:true});
+  }
+
+  state.user=user;
+  persistSession(user);
+  if(mobile)localStorage.setItem("abs_data_"+mobile,JSON.stringify(state.data));
+
+  const users=userRegistry();
+  let record=users.find(x=>x.uid===authUser.uid||x.mobile===mobile);
+  if(!record){
+    record={name:user.name,mobile,createdAt:profile.createdAt||new Date().toISOString()};
+    users.push(record);
+  }
+  record.name=user.name;
+  record.mobile=mobile;
+  record.uid=authUser.uid;
+  record.absId=user.absId||record.absId||"";
+  record.verified=user.verified;
+  record.premium=user.premium;
+  localStorage.setItem("abs_users",JSON.stringify(users));
+
+  setup();
+  watchUserProfile(authUser);
+  watchUserData(authUser);
+  refreshNotificationBadge();
+  return true;
+}
+
+function watchUserData(authUser){
+  stopUserDataWatch();
+  if(!firebaseAdminReady()||!authUser||state.user?.uid!==authUser.uid)return;
+  userDataUnsubscribe=firebase.firestore()
+    .collection("users").doc(authUser.uid)
+    .collection("private").doc("data")
+    .onSnapshot(snapshot=>{
+      if(!snapshot.exists||state.user?.uid!==authUser.uid)return;
+      const incoming=normalizeFinancialData(snapshot.data());
+      state.data=incoming;
+      const mobile=state.user.mobile;
+      if(mobile)localStorage.setItem("abs_data_"+mobile,JSON.stringify(incoming));
+      if(!document.hidden)render();
+    },error=>console.error("ABS cloud data sync failed:",error));
+}
 function watchUserProfile(authUser){
   stopUserProfileWatch();
   if(!firebaseAdminReady()||!authUser||!state.user||authUser.uid!==state.user.uid)return;
@@ -184,7 +278,29 @@ function watchUserProfile(authUser){
   },err=>console.error("ABS user profile sync failed:",err));
 }
 function requestPremium(){if(!state.user)return; if(isVerified()){toast("Premium is already unlocked");return} const all=premiumRequests();if(all.some(x=>x.mobile===state.user.mobile&&x.status==="pending")){toast("Premium request is already pending");return}all.unshift({id:uid(),name:state.user.name,mobile:state.user.mobile,status:"pending",createdAt:new Date().toISOString()});localStorage.setItem("abs_premium_requests",JSON.stringify(all));renderProfile();toast("Premium request sent to admin") }
-function refreshAppData(){if(!state.user)return;ensureData();syncUserRegistry();state.refreshToken=Date.now();render();if(state.tab==="dashboard")toast("Dashboard refreshed")}
+async function refreshAppData(){
+  if(!state.user)return;
+  const uid=state.user.uid;
+  try{
+    const snap=await firebase.firestore().collection("users").doc(uid).collection("private").doc("data").get();
+    if(state.user?.uid!==uid)return;
+    if(snap.exists){
+      state.data=normalizeFinancialData(snap.data());
+      localStorage.setItem(dataKey(),JSON.stringify(state.data));
+    }else{
+      // Never clear an existing local backup just because a cloud read returned no document.
+      ensureData();
+      await firebase.firestore().collection("users").doc(uid).collection("private").doc("data").set(state.data,{merge:true});
+    }
+    syncUserRegistry();
+    state.refreshToken=Date.now();
+    render();
+    if(state.tab==="dashboard")toast("Cloud data refreshed");
+  }catch(err){
+    console.error("ABS cloud refresh failed:",err);
+    toast("Cloud sync failed. Your saved local data was kept.",3500);
+  }
+}
 function animateMoney(selector,target,duration=900){const el=$(selector);if(!el)return;const start=Number(el.dataset.current||0);const end=Number(target||0);const t0=performance.now();const ease=t=>1-Math.pow(1-t,3);function tick(now){const p=Math.min(1,(now-t0)/duration);const val=start+(end-start)*ease(p);el.textContent=money(val);if(p<1)requestAnimationFrame(tick);else{el.dataset.current=String(end);el.textContent=money(end)}}requestAnimationFrame(tick)}
 
 function openFeedback(){if(!state.user)return;openModal("Feedback",`<div class="feedback-hero"><div class="feedback-icon">✦</div><div><div class="eyebrow">ABS DASHBOARD</div><h3>Tell us what you think</h3><p>Your feedback helps improve the app. You can report a problem, suggest a feature or share your experience.</p></div></div><form id="feedbackForm" class="professional-form"><div class="form-fields"><label class="field"><span>Feedback Type</span><div class="field-control"><select id="feedbackType"><option>Suggestion</option><option>Bug / Problem</option><option>Feature Request</option><option>Experience</option><option>Other</option></select></div></label><label class="field"><span>Rating</span><div class="field-control"><select id="feedbackRating"><option value="5">★★★★★ — Excellent</option><option value="4">★★★★☆ — Good</option><option value="3">★★★☆☆ — Average</option><option value="2">★★☆☆☆ — Needs improvement</option><option value="1">★☆☆☆☆ — Poor</option></select></div></label><label class="field full-field"><span>Your Feedback</span><div class="field-control"><textarea id="feedbackMessage" rows="6" required maxlength="1000" placeholder="Write your feedback here..."></textarea></div></label></div><button class="primary full">SUBMIT FEEDBACK</button></form>`);$("#feedbackForm").onsubmit=e=>{e.preventDefault();const msg=$("#feedbackMessage").value.trim();if(!msg)return toast("Please write your feedback");saveFeedbackItem({id:uid(),name:state.user.name,mobile:state.user.mobile,type:$("#feedbackType").value,rating:Number($("#feedbackRating").value),message:msg,createdAt:new Date().toISOString()});closeModal();toast("Feedback submitted — thank you")}}
@@ -974,24 +1090,30 @@ window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=o
 setup();
 if(firebaseAdminReady()){
   firebase.auth().onAuthStateChanged(async user=>{
-    if(user && state.user && state.user.uid===user.uid){
-      watchUserProfile(user);
-      refreshNotificationBadge();
+    if(user && user.uid===ABS_ADMIN_UID && !state.user){
+      stopUserProfileWatch();
+      await restoreFirebaseAdminSession();
+      return;
+    }
+    if(user){
+      try{
+        const restored=await restoreFirebaseUserSession(user);
+        if(!restored)console.warn("ABS account profile is missing for authenticated Firebase UID:",user.uid);
+      }catch(err){
+        console.error("ABS account cloud restore failed:",err);
+        const msg=$("#authMsg");
+        if(msg)msg.textContent="Your account data could not be synced. Please check your connection and retry.";
+      }
       return;
     }
     stopUserProfileWatch();
-    // Do not trust a remembered browser session when Firebase no longer has that account signed in.
-    if(state.user && (!user || state.user.uid!==user.uid)){
-      const mobile=state.user.mobile;
+    // Firebase sign-out must clear the session, never the user's financial backup.
+    if(state.user){
       clearSession();
-      if(mobile)localStorage.removeItem(`abs_data_${mobile}`);
-      const remaining=userRegistry().filter(x=>x.uid!==state.user.uid&&x.mobile!==mobile);
-      localStorage.setItem("abs_users",JSON.stringify(remaining));
       state.user=null;
       state.data=EMPTY_DATA();
       setup();
     }
-    if(user && user.uid===ABS_ADMIN_UID && !state.user){await restoreFirebaseAdminSession();}
   });
 }
 // Keep dashboard banners in sync with the central admin API while the page stays open.
