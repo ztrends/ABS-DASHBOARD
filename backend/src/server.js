@@ -73,9 +73,67 @@ function sign(u){return jwt.sign({sub:u.id,mobile:u.mobile,role:'user'},JWT_SECR
 function auth(req,res,next){try{const h=req.headers.authorization||'';if(!h.startsWith('Bearer '))throw 0;const p=jwt.verify(h.slice(7),JWT_SECRET);const u=db.prepare('SELECT id,abs_id,name,mobile,verified,premium,avatar,created_at FROM users WHERE id=?').get(p.sub);if(!u)throw 0;req.user=u;next()}catch(e){res.status(401).json({error:'Unauthorized'})}}
 function admin(req,res,next){try{const h=req.headers.authorization||'';if(!h.startsWith('Bearer '))throw 0;const p=jwt.verify(h.slice(7),JWT_SECRET);if(p.role!=='admin')throw 0;next()}catch(e){res.status(401).json({error:'Admin authorization required'})}}
 async function firebaseUserAuth(req,res,next){try{const h=req.headers.authorization||'';if(!h.startsWith('Bearer '))return res.status(401).json({error:'Please login to ABS first.'});const sdk=getFirebaseAdmin();const decoded=await sdk.auth().verifyIdToken(h.slice(7));const snap=await sdk.firestore().collection('users').doc(decoded.uid).get();const profile=snap.exists?(snap.data()||{}):{};req.firebaseUser={uid:decoded.uid,absId:String(profile.absId||profile.abs_id||profile.absID||'').trim(),verified:profile.verified===true,name:String(profile.name||'')};if(!req.firebaseUser.absId)req.firebaseUser.absId='ABS USER';next()}catch(e){console.error('ABS notification auth failed:',e.message);res.status(401).json({error:'Session could not be verified. Please sign in again.'})}}
+
 const app=express();
 app.use(cors()); app.use(express.json({limit:'10mb'}));
 app.use('/api/auth/',rateLimit({windowMs:15*60*1000,max:100}));
+function absFinancialRecordCount(data){
+  if(!data||typeof data!=='object')return 0;
+  return ['income','expenses','loans','emi','people','ledger','career'].reduce((n,k)=>n+(Array.isArray(data[k])?data[k].length:0),0);
+}
+// Customer data is read/written through the verified Firebase UID. This is the
+// same Firestore document the Admin details endpoint reads, never a mobile-keyed
+// or device-local data source.
+app.get('/api/customer/account-data',firebaseUserAuth,async(req,res)=>{
+  try{
+    const sdk=getFirebaseAdmin();
+    const userRef=sdk.firestore().collection('users').doc(req.firebaseUser.uid);
+    const [profileSnap,dataSnap]=await Promise.all([userRef.get(),userRef.collection('private').doc('data').get()]);
+    if(!profileSnap.exists)return res.status(404).json({error:'ABS account profile was not found for this login.'});
+    res.set('Cache-Control','no-store');
+    const data=dataSnap.exists?(dataSnap.data()||{}):null;
+    res.json({ok:true,uid:req.firebaseUser.uid,profile:profileSnap.data()||{},hasData:dataSnap.exists,revision:Number(data?._absRevision||0),data});
+  }catch(e){publicAdminError(res,e)}
+});
+app.put('/api/customer/account-data',firebaseUserAuth,async(req,res)=>{
+  try{
+    const incoming=req.body&&req.body.data;
+    if(!incoming||typeof incoming!=='object'||Array.isArray(incoming))return res.status(400).json({error:'A valid financial data object is required.'});
+    const sdk=getFirebaseAdmin();
+    const userRef=sdk.firestore().collection('users').doc(req.firebaseUser.uid);
+    const privateRef=userRef.collection('private').doc('data');
+    const expectedRevision=Number(req.body.expectedRevision||0);
+    const allowEmptyReset=req.body.allowEmptyReset===true;
+    const nowIso=new Date().toISOString();
+    let nextRevision=0;
+    await sdk.firestore().runTransaction(async tx=>{
+      const currentSnap=await tx.get(privateRef);
+      const current=currentSnap.exists?(currentSnap.data()||{}):{};
+      const currentRevision=Number(current._absRevision||0);
+      const currentCount=absFinancialRecordCount(current);
+      const incomingCount=absFinancialRecordCount(incoming);
+      if(expectedRevision!==currentRevision){
+        const err=new Error('Your ABS data changed on another device. Refresh cloud data before saving so no newer records are lost.');
+        err.status=409;throw err;
+      }
+      if(currentCount>0&&incomingCount===0&&!allowEmptyReset){
+        const err=new Error('Cloud financial records already exist. Empty data was rejected to protect the account.');
+        err.status=409;throw err;
+      }
+      nextRevision=currentRevision+1;
+      tx.set(privateRef,{...incoming,_absRevision:nextRevision,_absUpdatedAt:nowIso},{merge:false});
+    });
+    const sum=key=>(Array.isArray(incoming[key])?incoming[key]:[]).reduce((n,x)=>n+Number(x.amount||0),0);
+    const income=sum('income'),expense=sum('expenses'),emi=sum('emi');
+    const entries=absFinancialRecordCount(incoming);
+    await userRef.set({income,expense,net:income-expense-emi,entries,lastActive:nowIso},{merge:true});
+    res.set('Cache-Control','no-store');
+    res.json({ok:true,saved:true,entries,revision:nextRevision});
+  }catch(e){
+    if(e.status===409)return res.status(409).json({error:e.message});
+    publicAdminError(res,e);
+  }
+});
 app.get('/api/health',(req,res)=>res.json({ok:true,service:'ABS DASHBOARD API',time:now()}));
 app.post('/api/auth/register',(req,res)=>{const {name,mobile,password}=req.body||{};if(!name||!/^[6-9]\d{9}$/.test(String(mobile||''))||String(password||'').length<6)return res.status(400).json({error:'Name, valid 10-digit mobile and 6+ character password are required'});if(db.prepare('SELECT 1 FROM users WHERE mobile=?').get(mobile))return res.status(409).json({error:'Mobile number already registered'});const created=now(),hash=bcrypt.hashSync(password,12),absId=nextAbsId(String(mobile));const info=db.prepare('INSERT INTO users(abs_id,name,mobile,password_hash,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(absId,name,mobile,hash,created,created);const u=db.prepare('SELECT id,abs_id,name,mobile,verified,premium,avatar,created_at FROM users WHERE id=?').get(info.lastInsertRowid);res.status(201).json({user:u,token:sign(u)})});
 app.post('/api/auth/login',(req,res)=>{const {identifier,password}=req.body||{};const u=db.prepare('SELECT * FROM users WHERE mobile=? OR abs_id=?').get(identifier,identifier);if(!u||!bcrypt.compareSync(password||'',u.password_hash))return res.status(401).json({error:'Incorrect login details'});res.json({user:{id:u.id,abs_id:u.abs_id,name:u.name,mobile:u.mobile,verified:!!u.verified,premium:!!u.premium,avatar:u.avatar,created_at:u.created_at},token:sign(u)})});
