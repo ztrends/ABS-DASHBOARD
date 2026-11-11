@@ -111,27 +111,14 @@ const save=async()=>{
     });
     state.allowEmptyCloudReset=false;
   }catch(apiError){
+    console.error("ABS central cloud save failed:",apiError);
     if(apiError.status===409){
       toast(apiError.message||"Cloud data changed on another device. Refresh before saving.",6500);
-      return false;
+    }else{
+      toast("Cloud save is temporarily unavailable. Your local backup was kept; retry when connected.",6000);
     }
-    // Keep a secure Firestore fallback if the Render API is temporarily down.
-    console.warn("ABS customer cloud API save failed; using authenticated Firestore fallback:",apiError);
-    try{
-      const t=totals();
-      await firebase.firestore().collection("users").doc(state.user.uid)
-        .collection("private").doc("data").set(state.data,{merge:true});
-      await firebase.firestore().collection("users").doc(state.user.uid).set({
-        name:state.user.name,mobile:state.user.mobile,absId:state.user.absId||"",
-        income:t.income,expense:t.expense,net:t.net,
-        entries:financialRecordCount(state.data),lastActive:new Date().toISOString()
-      },{merge:true});
-      state.allowEmptyCloudReset=false;
-    }catch(err){
-      console.error("Central data save failed:",err);
-      toast(err.message||"Cloud save failed. Your local data was kept.",4000);
-      return false;
-    }
+    // Never bypass the revision-checked API with a direct Firestore write.
+    return false;
   }
   return true;
 };
@@ -251,12 +238,12 @@ async function restoreFirebaseUserSession(authUser){
     try{
       await customerCloudRequest("PUT",{data:bestData,expectedRevision:Number(state.cloudRevision||0),allowEmptyReset:false});
     }catch(migrationError){
-      console.warn("ABS data migration through customer API failed; keeping the existing protected Firestore fallback:",migrationError);
-      await privateRef.set({...bestData,_absRevision:Number(state.cloudRevision||0)},{merge:true});
+      console.warn("ABS data migration through customer API is pending:",migrationError);
+      toast("Your previous records are available on this device, but cloud sync is waiting for the server. No existing cloud data was replaced.",6500);
     }
   }else if(!cloudExists&&!profileHasHistory){
     try{await customerCloudRequest("PUT",{data:bestData,expectedRevision:Number(state.cloudRevision||0),allowEmptyReset:false})}
-    catch(createError){await privateRef.set(bestData,{merge:true})}
+    catch(createError){console.warn("ABS initial cloud data document creation is pending:",createError)}
   }
 
   state.user=user;
