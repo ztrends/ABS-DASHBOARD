@@ -69,6 +69,12 @@ state.data.settings=state.data.settings||EMPTY_DATA().settings; state.data.setti
 const money=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:0});
 const save=async()=>{
   if(!state.user?.uid)return;
+  // If the profile still reports older records but no full record set could be
+  // recovered, block writes rather than replacing the account with a partial/empty dataset.
+  if(state.cloudDataNeedsRecovery){
+    toast("Your previous financial records need recovery first. No data was overwritten.",6000);
+    return false;
+  }
 
   // Local cache
   localStorage.setItem(
