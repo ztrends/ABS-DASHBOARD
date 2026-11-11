@@ -74,6 +74,9 @@ function auth(req,res,next){try{const h=req.headers.authorization||'';if(!h.star
 function admin(req,res,next){try{const h=req.headers.authorization||'';if(!h.startsWith('Bearer '))throw 0;const p=jwt.verify(h.slice(7),JWT_SECRET);if(p.role!=='admin')throw 0;next()}catch(e){res.status(401).json({error:'Admin authorization required'})}}
 async function firebaseUserAuth(req,res,next){try{const h=req.headers.authorization||'';if(!h.startsWith('Bearer '))return res.status(401).json({error:'Please login to ABS first.'});const sdk=getFirebaseAdmin();const decoded=await sdk.auth().verifyIdToken(h.slice(7));const snap=await sdk.firestore().collection('users').doc(decoded.uid).get();const profile=snap.exists?(snap.data()||{}):{};req.firebaseUser={uid:decoded.uid,absId:String(profile.absId||profile.abs_id||profile.absID||'').trim(),verified:profile.verified===true,name:String(profile.name||'')};if(!req.firebaseUser.absId)req.firebaseUser.absId='ABS USER';next()}catch(e){console.error('ABS notification auth failed:',e.message);res.status(401).json({error:'Session could not be verified. Please sign in again.'})}}
 
+const app=express();
+app.use(cors()); app.use(express.json({limit:'10mb'}));
+app.use('/api/auth/',rateLimit({windowMs:15*60*1000,max:100}));
 function absFinancialRecordCount(data){
   if(!data||typeof data!=='object')return 0;
   return ['income','expenses','loans','emi','people','ledger','career'].reduce((n,k)=>n+(Array.isArray(data[k])?data[k].length:0),0);
@@ -114,10 +117,6 @@ app.put('/api/customer/account-data',firebaseUserAuth,async(req,res)=>{
     res.json({ok:true,saved:true,entries});
   }catch(e){publicAdminError(res,e)}
 });
-
-const app=express();
-app.use(cors()); app.use(express.json({limit:'10mb'}));
-app.use('/api/auth/',rateLimit({windowMs:15*60*1000,max:100}));
 app.get('/api/health',(req,res)=>res.json({ok:true,service:'ABS DASHBOARD API',time:now()}));
 app.post('/api/auth/register',(req,res)=>{const {name,mobile,password}=req.body||{};if(!name||!/^[6-9]\d{9}$/.test(String(mobile||''))||String(password||'').length<6)return res.status(400).json({error:'Name, valid 10-digit mobile and 6+ character password are required'});if(db.prepare('SELECT 1 FROM users WHERE mobile=?').get(mobile))return res.status(409).json({error:'Mobile number already registered'});const created=now(),hash=bcrypt.hashSync(password,12),absId=nextAbsId(String(mobile));const info=db.prepare('INSERT INTO users(abs_id,name,mobile,password_hash,created_at,updated_at) VALUES(?,?,?,?,?,?)').run(absId,name,mobile,hash,created,created);const u=db.prepare('SELECT id,abs_id,name,mobile,verified,premium,avatar,created_at FROM users WHERE id=?').get(info.lastInsertRowid);res.status(201).json({user:u,token:sign(u)})});
 app.post('/api/auth/login',(req,res)=>{const {identifier,password}=req.body||{};const u=db.prepare('SELECT * FROM users WHERE mobile=? OR abs_id=?').get(identifier,identifier);if(!u||!bcrypt.compareSync(password||'',u.password_hash))return res.status(401).json({error:'Incorrect login details'});res.json({user:{id:u.id,abs_id:u.abs_id,name:u.name,mobile:u.mobile,verified:!!u.verified,premium:!!u.premium,avatar:u.avatar,created_at:u.created_at},token:sign(u)})});
