@@ -279,7 +279,7 @@ jobs:
               raise SystemExit('AbsShare bridge registration not found')
           updater_marker = 'getBridge().getWebView().addJavascriptInterface(new AbsUpdaterBridge(), "AbsUpdater");'
           if updater_marker not in s:
-              s = s.replace(marker, marker + '\\n        ' + updater_marker, 1)
+              s = s.replace(marker, marker + '\n                      ' + updater_marker, 1)
           receiver_registration = '''
                       if (apkDownloadReceiver != null) {
                           IntentFilter apkFilter = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
