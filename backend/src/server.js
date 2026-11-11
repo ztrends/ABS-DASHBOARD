@@ -180,12 +180,19 @@ app.get('/api/notifications',firebaseUserAuth,(req,res)=>{
   const stamp=now();
   const notices=db.prepare('SELECT id,title,message,type,link,active,created_at FROM notifications WHERE active=1 ORDER BY id DESC LIMIT 100').all();
   const ads=db.prepare("SELECT id,title,text,badge,image,link,created_at FROM ads WHERE active=1 AND (starts_at IS NULL OR starts_at='' OR starts_at<=?) AND (ends_at IS NULL OR ends_at='' OR ends_at>=?) ORDER BY id DESC LIMIT 100").all(stamp,stamp);
+  const configuredUpdate=db.prepare("SELECT value FROM settings WHERE key='app_update'").get();
+  let appUpdate=null;try{appUpdate=configuredUpdate?JSON.parse(configuredUpdate.value):null}catch(_){}
   const items=[
     ...notices.map(x=>({id:`notice-${x.id}`,source_id:String(x.id),type:x.type||'announcement',title:x.title,message:x.message,link:x.link||'',image:'',created_at:x.created_at})),
     ...ads.map(x=>({id:`ad-${x.id}`,source_id:String(x.id),type:'ad',title:x.title||x.badge||'ABS update',message:x.text||'A new update is available from ABS DASHBOARD.',link:x.link||'',image:x.image||'',created_at:x.created_at||stamp}))
+,
+    ...(appUpdate&&appUpdate.active?[{id:'app-update-'+appUpdate.version,source_id:String(appUpdate.version),type:'app_update',title:appUpdate.title||'ABS DASHBOARD update available',message:appUpdate.message||('Version '+appUpdate.version+' is ready. Tap Update App to install.'),link:appUpdate.url,image:'',version:Number(appUpdate.version),created_at:appUpdate.updatedAt||stamp}]:[])
   ].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).slice(0,100);
   res.json({items});
 });
+app.get('/api/app-update',(req,res)=>{const row=db.prepare("SELECT value FROM settings WHERE key='app_update'").get();let item=null;try{item=row?JSON.parse(row.value):null}catch(_){}res.set('Cache-Control','no-store');res.json({item:item&&item.active?item:null});});
+app.get('/api/admin/app-update',admin,(req,res)=>{const row=db.prepare("SELECT value FROM settings WHERE key='app_update'").get();let item=null;try{item=row?JSON.parse(row.value):null}catch(_){}res.json({item});});
+app.put('/api/admin/app-update',admin,(req,res)=>{const x=req.body||{},version=Number(x.version),url=String(x.url||'').trim(),title=String(x.title||'ABS DASHBOARD update available').trim().slice(0,120),message=String(x.message||'A new version is ready. Tap Update App to install it.').trim().slice(0,1000);if(!Number.isInteger(version)||version<1)return res.status(400).json({error:'Enter a valid whole-number app version.'});if(!/^https:\/\//i.test(url))return res.status(400).json({error:'APK link must start with https://'});if(!/\.apk(?:$|[?#])/i.test(url))return res.status(400).json({error:'The download link must point to an APK file.'});const current=db.prepare("SELECT value FROM settings WHERE key='app_update'").get();let previous=null;try{previous=current?JSON.parse(current.value):null}catch(_){}if(previous&&version<Number(previous.version||0))return res.status(409).json({error:'New version cannot be lower than the currently published version.'});const item={version,url,title,message,active:true,updatedAt:now()};db.prepare("INSERT INTO settings(key,value) VALUES('app_update',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(item));res.json({ok:true,item});});
 app.get('/api/admin/notifications',admin,(req,res)=>res.json({items:db.prepare('SELECT id,title,message,type,link,active,created_at FROM notifications ORDER BY id DESC LIMIT 500').all().map(x=>({...x,active:!!x.active}))}));
 app.post('/api/admin/notifications',admin,(req,res)=>{
   const x=req.body||{},title=String(x.title||'').trim(),message=String(x.message||'').trim(),link=String(x.link||'').trim();
