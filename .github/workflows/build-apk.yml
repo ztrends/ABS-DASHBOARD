@@ -75,7 +75,7 @@ jobs:
           version_file.write_text('window.ABS_APP_VERSION = "' + version + '";\n')
           # Bust the WebView asset cache for the version script.
           html = p.read_text()
-          html = re.sub(r'js/app-version\.js(?:\?[^"\\']*)?', 'js/app-version.js?v=' + version, html, count=1)
+          html = re.sub(r'js/app-version\.js(?:\?[^\"]*)?', 'js/app-version.js?v=' + version, html, count=1)
           p.write_text(html)
           print('Stamped ABS APK runtime version', version)
           PY
