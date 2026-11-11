@@ -36,6 +36,7 @@ jobs:
         run: |
           cd frontend
           rm -rf www && mkdir -p www
+          echo "window.ABS_APP_VERSION = \"${GITHUB_RUN_NUMBER}\";" > js/app-version.js
           mkdir -p js/vendor
           cp node_modules/jspdf/dist/jspdf.umd.min.js js/vendor/jspdf.umd.min.js
           cp index.html www/index.html
@@ -79,6 +80,27 @@ jobs:
           npx cap init "ABS DASHBOARD" "com.absdashboard.app" --web-dir www
           npx cap add android
           npx cap sync android
+
+      - name: Set increasing Android app version
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          cd frontend/android
+          python3 - <<'PYVER'
+          from pathlib import Path
+          import os, re
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          version = int(os.environ['VERSION_CODE'])
+          if not re.search(r'versionCode\s+\d+', s):
+              raise SystemExit('Could not find Android versionCode in app/build.gradle')
+          s = re.sub(r'versionCode\s+\d+', f'versionCode {version}', s, count=1)
+          if not re.search(r'versionName\s+"[^"]+"', s):
+              raise SystemExit('Could not find Android versionName in app/build.gradle')
+          s = re.sub(r'versionName\s+"[^"]+"', f'versionName "1.0.{version}"', s, count=1)
+          p.write_text(s)
+          print(f'Android versionCode={version}, versionName=1.0.{version}')
+          PYVER
 
      
       - name: Generate ABS Android launcher icon
@@ -163,6 +185,37 @@ jobs:
           p.write_text(s)
           PYSHARE
 
+      - name: Add native APK update browser bridge
+        run: |
+          cd frontend/android
+          python3 - <<'PYUPD'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/absdashboard/app/MainActivity.java')
+          s = p.read_text()
+          marker = 'getBridge().getWebView().addJavascriptInterface(new AbsShareBridge(), "AbsShare");'
+          hook = marker + '\n                      getBridge().getWebView().addJavascriptInterface(new AbsUpdaterBridge(), "AbsUpdater");'
+          if 'addJavascriptInterface(new AbsUpdaterBridge(), "AbsUpdater")' not in s:
+              if marker not in s:
+                  raise SystemExit('AbsShare bridge hook not found')
+              s = s.replace(marker, hook, 1)
+          if 'class AbsUpdaterBridge' not in s:
+              i = s.rfind('}')
+              block = '''
+              private class AbsUpdaterBridge {
+                  @JavascriptInterface
+                  public void openDownload(String url) {
+                      if (url == null || !url.startsWith("https://github.com/ztrends/ABS-DASHBOARD/releases/download/")) return;
+                      runOnUiThread(() -> {
+                          Intent intent = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
+                          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                          startActivity(intent);
+                      });
+                  }
+              }
+              '''
+              s = s[:i] + block + '\n' + s[i:]
+          p.write_text(s)
+          PYUPD
       - name: Add native PDF save bridge for Android Downloads
         run: |
           cd frontend/android
