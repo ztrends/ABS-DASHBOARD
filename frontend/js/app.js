@@ -157,7 +157,7 @@ async function restoreFirebaseUserSession(authUser){
   const db=firebase.firestore();
   const userRef=db.collection("users").doc(authUser.uid);
   const privateRef=userRef.collection("private").doc("data");
-  const [profileSnap,dataSnap]=await Promise.all([userRef.get(),privateRef.get()]);
+  const [profileSnap,dataSnap]=await Promise.all([userRef.get({source:"server"}),privateRef.get({source:"server"})]);
   if(!profileSnap.exists)return false;
 
   const profile=profileSnap.data()||{};
@@ -220,7 +220,7 @@ function watchUserData(authUser){
     .collection("users").doc(authUser.uid)
     .collection("private").doc("data")
     .onSnapshot(snapshot=>{
-      if(!snapshot.exists||state.user?.uid!==authUser.uid)return;
+      if(snapshot.metadata?.fromCache||!snapshot.exists||state.user?.uid!==authUser.uid)return;
       const incoming=normalizeFinancialData(snapshot.data());
       state.data=incoming;
       const mobile=state.user.mobile;
@@ -282,7 +282,7 @@ async function refreshAppData(){
   if(!state.user)return;
   const uid=state.user.uid;
   try{
-    const snap=await firebase.firestore().collection("users").doc(uid).collection("private").doc("data").get();
+    const snap=await firebase.firestore().collection("users").doc(uid).collection("private").doc("data").get({source:"server"});
     if(state.user?.uid!==uid)return;
     if(snap.exists){
       state.data=normalizeFinancialData(snap.data());
@@ -984,8 +984,10 @@ window.openAdd=openAdd;window.openCategories=openCategories;window.openHistory=o
 setup();
 if(firebaseAdminReady()){
   firebase.auth().onAuthStateChanged(async user=>{
-    if(user && user.uid===ABS_ADMIN_UID && !state.user){
+    if(user && user.uid===ABS_ADMIN_UID){
       stopUserProfileWatch();
+      state.user=null;
+      state.data=EMPTY_DATA();
       await restoreFirebaseAdminSession();
       return;
     }
