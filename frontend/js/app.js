@@ -797,6 +797,7 @@ async function refreshNotificationBadge(){
   if(!state.user||!firebaseAdminReady()||!firebase.auth().currentUser)return;
   try{state.notifications=await fetchABSNotifications();updateNotificationBadge(state.notifications)}catch(err){console.warn('ABS notifications refresh failed:',err.message)}
 }
+setInterval(()=>{if(state.user)refreshNotificationBadge()},60000);
 function renderNotifications(){
   document.body.classList.remove('ai-open');const screen=$('#screen');if(!screen)return;
   screen.innerHTML=`<div class="page-title">Notifications</div><p class="page-sub">Important ABS updates and active offers, all in one place.</p><div id="notificationFeed" class="notification-feed"><div class="empty-state large"><span>♢</span><b>Loading notifications…</b></div></div>`;
