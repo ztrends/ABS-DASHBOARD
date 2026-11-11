@@ -69,7 +69,15 @@ jobs:
               raise SystemExit('HTML head element not found')
           html = html.replace(marker, marker + '\n<script>window.ABS_APP_VERSION = "' + version + '";</script>', 1)
           p.write_text(html)
-          print('Stamped ABS APK version', version)
+          # Stamp runtime version too; app-version.js loads after the inline HTML
+          # version and otherwise overrides it with the checked-in fallback.
+          version_file = Path('www/js/app-version.js')
+          version_file.write_text('window.ABS_APP_VERSION = "' + version + '";\\n')
+          # Bust the WebView asset cache for the version script.
+          html = p.read_text()
+          html = re.sub(r'js/app-version\\.js(?:\\?[^"\\']*)?', 'js/app-version.js?v=' + version, html, count=1)
+          p.write_text(html)
+          print('Stamped ABS APK runtime version', version)
           PY
 
       - name: Generate ABS Android launcher icon
