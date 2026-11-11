@@ -46,34 +46,6 @@ jobs:
           cp manifest.json www/manifest.json 2>/dev/null || true
           cp sw.js www/sw.js 2>/dev/null || true
 
-      - name: Stamp APK build version
-        env:
-          ABS_BUILD_VERSION: ${{ github.run_number }}
-        run: |
-          cd frontend
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-          version = os.environ['ABS_BUILD_VERSION']
-          p = Path('www/index.html')
-          html = p.read_text()
-          marker = '<head>'
-          if marker not in html:
-              raise SystemExit('HTML head element not found')
-          html = html.replace(marker, marker + '\\n<script>window.ABS_APP_VERSION = "' + version + '";</script>', 1)
-          p.write_text(html)
-          gradle = Path('android/app/build.gradle')
-          if not gradle.exists():
-              raise SystemExit('Android app/build.gradle not found')
-          source = gradle.read_text()
-          source, code_count = re.subn(r'(?m)(\\bversionCode\\s+)\\d+', r'\\g<1>' + version, source, count=1)
-          source, name_count = re.subn(r'(?m)(\\bversionName\\s+)["\\'][^"\\']+["\\']', r'\\g<1>"' + version + '"', source, count=1)
-          if code_count != 1 or name_count != 1:
-              raise SystemExit('Could not safely set Android versionCode/versionName')
-          gradle.write_text(source)
-          print('Stamped ABS APK version', version)
-          PY
-
       - name: Initialize Capacitor
         run: |
           cd frontend
@@ -103,6 +75,34 @@ jobs:
           PYVER
 
      
+      - name: Stamp APK build version
+        env:
+          ABS_BUILD_VERSION: \${{ github.run_number }}
+        run: |
+          cd frontend
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          version = os.environ['ABS_BUILD_VERSION']
+          p = Path('www/index.html')
+          html = p.read_text()
+          marker = '<head>'
+          if marker not in html:
+              raise SystemExit('HTML head element not found')
+          html = html.replace(marker, marker + '\n<script>window.ABS_APP_VERSION = "' + version + '";</script>', 1)
+          p.write_text(html)
+          gradle = Path('android/app/build.gradle')
+          if not gradle.exists():
+              raise SystemExit('Android app/build.gradle not found')
+          source = gradle.read_text()
+          source, code_count = re.subn(r'(?m)(\bversionCode\s+)\d+', r'\g<1>' + version, source, count=1)
+          source, name_count = re.subn(r'(?m)(\bversionName\s+)["\'][^"\']+["\']', r'\g<1>"' + version + '"', source, count=1)
+          if code_count != 1 or name_count != 1:
+              raise SystemExit('Could not safely set Android versionCode/versionName')
+          gradle.write_text(source)
+          print('Stamped ABS APK version', version)
+          PY
+
       - name: Generate ABS Android launcher icon
         run: |
           cd frontend
