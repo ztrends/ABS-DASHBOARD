@@ -55,7 +55,7 @@ jobs:
 
       - name: Stamp APK build version
         env:
-          ABS_BUILD_VERSION: \${{ github.run_number }}
+          ABS_BUILD_VERSION: ${{ github.run_number }}
         run: |
           cd frontend
           python3 - <<'PY'
@@ -258,17 +258,17 @@ jobs:
           p = Path('app/src/main/java/com/absdashboard/app/MainActivity.java')
           s = p.read_text()
           imports = ['import android.content.Intent;', 'import android.net.Uri;', 'import android.webkit.JavascriptInterface;']
-          first_line_end = s.find('\\n')
+          first_line_end = s.find('\n')
           if first_line_end < 0:
               raise SystemExit('MainActivity package declaration missing')
-          additions = ''.join('\\n' + item for item in imports if item not in s)
+          additions = ''.join('\n' + item for item in imports if item not in s)
           if additions:
               s = s[:first_line_end] + additions + s[first_line_end:]
           marker = 'getBridge().getWebView().addJavascriptInterface(new AbsShareBridge(), "AbsShare");'
           if marker not in s:
               raise SystemExit('AbsShare bridge registration not found')
           if 'addJavascriptInterface(new AbsUpdaterBridge(), "AbsUpdater")' not in s:
-              s = s.replace(marker, marker + '\\n                      getBridge().getWebView().addJavascriptInterface(new AbsUpdaterBridge(), "AbsUpdater");', 1)
+              s = s.replace(marker, marker + '\n                      getBridge().getWebView().addJavascriptInterface(new AbsUpdaterBridge(), "AbsUpdater");', 1)
           if 'class AbsUpdaterBridge' not in s:
               i = s.rfind('}')
               block = '''
@@ -284,7 +284,7 @@ jobs:
                   }
               }
               '''
-              s = s[:i] + block + '\\n' + s[i:]
+              s = s[:i] + block + '\n' + s[i:]
           p.write_text(s)
           PY
 
