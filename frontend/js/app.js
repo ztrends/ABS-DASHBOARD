@@ -8,6 +8,24 @@ let userProfileUnsubscribe = null;
 let userDataUnsubscribe = null;
 const ABS_PUBLIC_API_BASE = "https://abs-dashboard-t7up.onrender.com/api";
 
+async function customerCloudRequest(method="GET",body=null){
+  const authUser=firebaseAdminReady()?firebase.auth().currentUser:null;
+  if(!authUser)throw new Error("Please sign in again to sync your ABS data.");
+  const token=await authUser.getIdToken();
+  const response=await fetch(`${ABS_PUBLIC_API_BASE}/customer/account-data`,{
+    method,
+    headers:{"Authorization":`Bearer ${token}`,"Content-Type":"application/json"},
+    cache:"no-store",
+    ...(body?{body:JSON.stringify(body)}:{})
+  });
+  let result={};
+  try{result=await response.json()}catch(_){}
+  if(!response.ok)throw new Error(result.error||`Cloud data request failed (${response.status})`);
+  if(result.uid&&result.uid!==authUser.uid)throw new Error("Cloud account UID mismatch. Data was not loaded.");
+  return result;
+}
+
+
 // Initialize Firebase once the Firebase compat scripts and config from index.html are available.
 (function initABSFirebase(){
   try{
@@ -85,37 +103,31 @@ const save=async()=>{
   syncUserRegistry();
 
   try{
-    const t=totals();
-
-    await firebase.firestore()
-      .collection("users")
-      .doc(state.user.uid)
-      .collection("private")
-      .doc("data")
-      .set(state.data,{merge:true});
-
-    await firebase.firestore()
-      .collection("users")
-      .doc(state.user.uid)
-      .set({
-        name:state.user.name,
-        mobile:state.user.mobile,
-        absId:state.user.absId||"",
-        income:t.income,
-        expense:t.expense,
-        net:t.net,
-        entries:
-          state.data.income.length+
-          state.data.expenses.length+
-          state.data.loans.length+
-          state.data.emi.length+
-          state.data.ledger.length,
-        lastActive:new Date().toISOString()
+    await customerCloudRequest("PUT",{
+      data:state.data,
+      allowEmptyReset:state.allowEmptyCloudReset===true
+    });
+    state.allowEmptyCloudReset=false;
+  }catch(apiError){
+    // Keep a secure Firestore fallback if the Render API is temporarily down.
+    console.warn("ABS customer cloud API save failed; using authenticated Firestore fallback:",apiError);
+    try{
+      const t=totals();
+      await firebase.firestore().collection("users").doc(state.user.uid)
+        .collection("private").doc("data").set(state.data,{merge:true});
+      await firebase.firestore().collection("users").doc(state.user.uid).set({
+        name:state.user.name,mobile:state.user.mobile,absId:state.user.absId||"",
+        income:t.income,expense:t.expense,net:t.net,
+        entries:financialRecordCount(state.data),lastActive:new Date().toISOString()
       },{merge:true});
-
-  }catch(err){
-    console.error("Central data save failed:",err);
+      state.allowEmptyCloudReset=false;
+    }catch(err){
+      console.error("Central data save failed:",err);
+      toast(err.message||"Cloud save failed. Your local data was kept.",4000);
+      return false;
+    }
   }
+  return true;
 };
 function userRegistry(){return JSON.parse(localStorage.getItem("abs_users")||"[]")}
 function nextAbsSerial(users){const nums=users.map(u=>String(u.absId||"").match(/(\d{4,})$/)).filter(Boolean).map(m=>Number(m[1])).filter(n=>Number.isFinite(n));return Math.max(1000,...nums)+1}
@@ -177,10 +189,25 @@ async function restoreFirebaseUserSession(authUser){
   const db=firebase.firestore();
   const userRef=db.collection("users").doc(authUser.uid);
   const privateRef=userRef.collection("private").doc("data");
-  const [profileSnap,dataSnap]=await Promise.all([userRef.get({source:"server"}),privateRef.get({source:"server"})]);
-  if(!profileSnap.exists)return false;
+  let profile=null,cloudRaw=null,cloudExists=false;
+  try{
+    // Read the canonical account and private financial document by the verified
+    // Firebase UID. This is the exact same source used by the Admin details API.
+    const account=await customerCloudRequest("GET");
+    if(account.uid!==authUser.uid)throw new Error("The signed-in account does not match the requested ABS profile.");
+    profile=account.profile||{};
+    cloudRaw=account.data||null;
+    cloudExists=account.hasData===true;
+  }catch(apiError){
+    console.warn("ABS customer cloud API read failed; trying authenticated Firestore read:",apiError);
+    const [profileSnap,dataSnap]=await Promise.all([userRef.get({source:"server"}),privateRef.get({source:"server"})]);
+    if(!profileSnap.exists)return false;
+    profile=profileSnap.data()||{};
+    cloudRaw=dataSnap.exists?dataSnap.data():null;
+    cloudExists=dataSnap.exists;
+  }
+  if(!profile)return false;
 
-  const profile=profileSnap.data()||{};
   const mobile=String(profile.mobile||String(authUser.email||"").split("@")[0]||"").trim();
   const user={
     name:profile.name||"User",
@@ -195,7 +222,7 @@ async function restoreFirebaseUserSession(authUser){
   if(mobile){
     try{localData=normalizeFinancialData(JSON.parse(localStorage.getItem("abs_data_"+mobile)||"null"))}catch(_){}
   }
-  const cloudData=dataSnap.exists?normalizeFinancialData(dataSnap.data()):null;
+  const cloudData=cloudExists?normalizeFinancialData(cloudRaw):null;
   const legacyProfileData=financialDataFromProfile(profile);
   // Pick the copy containing the most actual records. An empty document on a
   // second device must never win over a richer local or legacy profile copy.
@@ -211,9 +238,9 @@ async function restoreFirebaseUserSession(authUser){
 
   // Migrate only when a real record set is available. Never create or upload
   // an empty dataset when the account profile proves that financial history exists.
-  if(bestCount>0&&(!dataSnap.exists||bestCount>cloudCount)){
+  if(bestCount>0&&(!cloudExists||bestCount>cloudCount)){
     await privateRef.set(bestData,{merge:true});
-  }else if(!dataSnap.exists&&!profileHasHistory){
+  }else if(!cloudExists&&!profileHasHistory){
     await privateRef.set(bestData,{merge:true});
   }
 
@@ -316,10 +343,21 @@ async function refreshAppData(){
   if(!state.user)return;
   const uid=state.user.uid;
   try{
-    const snap=await firebase.firestore().collection("users").doc(uid).collection("private").doc("data").get({source:"server"});
+    let remoteData=null,remoteExists=false;
+    try{
+      const account=await customerCloudRequest("GET");
+      if(account.uid!==uid)throw new Error("Cloud account UID mismatch.");
+      remoteData=account.data||null;
+      remoteExists=account.hasData===true;
+    }catch(apiError){
+      console.warn("ABS customer cloud API refresh failed; using Firestore fallback:",apiError);
+      const snap=await firebase.firestore().collection("users").doc(uid).collection("private").doc("data").get({source:"server"});
+      remoteData=snap.exists?snap.data():null;
+      remoteExists=snap.exists;
+    }
     if(state.user?.uid!==uid)return;
-    if(snap.exists){
-      const incoming=normalizeFinancialData(snap.data());
+    if(remoteExists){
+      const incoming=normalizeFinancialData(remoteData);
       if(state.cloudDataNeedsRecovery&&financialRecordCount(incoming)===0){
         toast("Cloud data is incomplete. Existing financial history was protected; no empty overwrite was made.",5000);
         return;
@@ -335,7 +373,7 @@ async function refreshAppData(){
         return;
       }
       ensureData();
-      await firebase.firestore().collection("users").doc(uid).collection("private").doc("data").set(state.data,{merge:true});
+      await customerCloudRequest("PUT",{data:state.data,allowEmptyReset:false});
     }
     syncUserRegistry();
     state.refreshToken=Date.now();
@@ -1011,6 +1049,7 @@ function resetFinancialData(){
     try{
       await reauthenticateCurrentAccount($("#freshPassword").value);
       state.data=EMPTY_DATA();
+      state.allowEmptyCloudReset=true;
       await save();
       closeModal();render();toast("Financial data reset to zero");
     }catch(err){console.error("Financial data reset failed:",err);toast(authPasswordError(err));}
