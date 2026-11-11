@@ -410,41 +410,10 @@ $("#registerForm").onsubmit=async e=>{
         lastActive:new Date().toISOString()
       });
 
-    state.user={
-      name:n,
-      mobile:m,
-      absId:absId,
-      uid:cred.user.uid,
-      verified:false,
-      premium:false
-    };
-
-    // Never reuse local financial cache from a previously deleted account with the same mobile.
-    localStorage.removeItem(dataKey());
-    state.data=EMPTY_DATA();
-    ensureData();
-
-    persistSession(state.user);
-
-    users.push({
-      name:n,
-      mobile:m,
-      absSerial:serial,
-      absId:absId,
-      createdAt:new Date().toISOString(),
-      income:0,
-      expense:0,
-      net:0,
-      entries:0,
-      uid:cred.user.uid
-    });
-
-    localStorage.setItem(
-      "abs_users",
-      JSON.stringify(users)
-    );
-
-    setup();
+    // A newly registered UID starts with a clean dataset; never attach a deleted
+    // account's old mobile-keyed cache to a new Firebase identity.
+    localStorage.removeItem("abs_data_"+m);
+    await restoreFirebaseUserSession(cred.user);
 
   }catch(err){
 
@@ -497,86 +466,11 @@ $("#loginForm").onsubmit=async e=>{
       await firebase.auth()
       .signInWithEmailAndPassword(email,p);
 
-    const snap=
-      await firebase.firestore()
-      .collection("users")
-      .doc(cred.user.uid)
-      .get();
-
-    if(!snap.exists){
+    const restored=await restoreFirebaseUserSession(cred.user);
+    if(!restored){
       await firebase.auth().signOut();
-
-      return $("#authMsg").textContent=
-        "Account record not found.";
+      return $("#authMsg").textContent="Account record not found. Contact ABS support.";
     }
-
-    const u=snap.data();
-
-    state.user={
-      name:u.name||"User",
-      mobile:u.mobile||m,
-      absId:u.absId||"",
-      uid:cred.user.uid,
-      verified:u.verified===true,
-      premium:u.premium===true
-    };
-
-    const dataSnap=
-      await firebase.firestore()
-      .collection("users")
-      .doc(cred.user.uid)
-      .collection("private")
-      .doc("data")
-      .get();
-
-    if(dataSnap.exists){
-
-      state.data={
-        ...EMPTY_DATA(),
-        ...dataSnap.data()
-      };
-
-    }else{
-
-      state.data=EMPTY_DATA();
-
-      ensureData();
-
-    }
-
-    persistSession(state.user);
-
-    const users=userRegistry();
-
-    const existing=
-      users.find(x=>x.mobile===m);
-
-    if(existing){
-
-      existing.name=state.user.name;
-      existing.uid=cred.user.uid;
-      existing.absId=state.user.absId;
-
-    }else{
-
-      users.push({
-        name:state.user.name,
-        mobile:m,
-        uid:cred.user.uid,
-        absId:state.user.absId,
-        createdAt:
-          u.createdAt||
-          new Date().toISOString()
-      });
-
-    }
-
-    localStorage.setItem(
-      "abs_users",
-      JSON.stringify(users)
-    );
-
-    setup();
 
   }catch(err){
 
