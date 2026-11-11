@@ -6,6 +6,8 @@
   const titles = {
     dashboard:'Overview',
     users:'Users & Accounts',
+    'user-data':'User Data',
+    'app-update':'App Update',
     ads:'Ads & Campaigns',
     notifications:'Broadcasts',
     support:'Support Inbox',
